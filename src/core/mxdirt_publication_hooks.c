@@ -15,6 +15,7 @@ struct MxbPublicationHooks {
  uint64_t reservation; int dirty_seen,retired;
  volatile LONG faulted,in_publisher,failure_result;int fail_line;
  MxbPublicationHookState stats;
+ size_t cap_tiles;LONGLONG gap_ticks,last_send; /* pacing (mxb_publication_hooks_pacing) */
 };
 static MxbPublicationHooks *volatile bound;
 static const unsigned char publisher_call[5]={0xe8,0x66,0xf6,0xff,0xff};
@@ -91,7 +92,7 @@ MxbPublicationHooks *mxb_publication_hooks_create(const MxbPublicationHookConfig
  if(!mxb_publication_receive_plan(&c->pacing,c->receive_plan.replacement,&plan)||
     plan.site!=c->receive_plan.site||plan.original_target!=c->receive_plan.original_target||
     memcmp(plan.original,c->receive_plan.original,5)||memcmp(plan.patch,c->receive_plan.patch,5))return NULL;
- MxbPublicationHooks *h=calloc(1,sizeof(*h));if(!h)return NULL;h->c=*c;h->tiles=tiles;
+ MxbPublicationHooks *h=calloc(1,sizeof(*h));if(!h)return NULL;h->c=*c;h->tiles=tiles;h->cap_tiles=c->max_batch_tiles;
  if(!mxb_pace_binding(&h->c.pacing,0,NULL)){free(h);return NULL;}
  h->receive_full=(const int32_t*)mxb_pace_ptr(h->c.pacing.exe+0x5a21c8+0x28);
  h->before=calloc(tiles,1);h->zero=calloc(tiles,1);h->echo_seen=calloc(tiles,1);h->chosen=calloc(tiles,1);
@@ -127,6 +128,11 @@ int mxb_publication_hooks_recover(MxbPublicationHooks *h,DWORD thread){
  h->reservation=0;h->echo_count=0;h->dirty_seen=0;h->selected_count=0;memset(h->echo_seen,0,h->tiles);
  InterlockedExchange(&h->failure_result,0);h->fail_line=0;InterlockedExchange(&h->faulted,0);
  if(!binding(h,1)){fail(h,MXB_PUB_FAULT);return 0;}return 1;
+}
+int mxb_publication_hooks_pacing(MxbPublicationHooks *h,size_t max_tiles,uint32_t interval_ms){
+ if(!h||h->in_publisher||!h->cap_tiles)return 0;
+ h->c.max_batch_tiles=max_tiles<1?1:max_tiles>h->cap_tiles?h->cap_tiles:max_tiles;
+ LARGE_INTEGER f;QueryPerformanceFrequency(&f);h->gap_ticks=interval_ms?(LONGLONG)interval_ms*f.QuadPart/1000:0;return 1;
 }
 int mxb_publication_hooks_disable_drained(MxbPublicationHooks *h,DWORD thread){
  if(!h||h->in_publisher||h->faulted||!current_owner(h,thread))return 0;
@@ -179,8 +185,11 @@ int mxb_publication_dirty(MxbPublicationHooks *h,int id,unsigned mode,unsigned c
      to the native loop. Keep every pre-callback dirty flag for retirement. */
   memcpy(h->c.pending.dirty,h->before,h->tiles);fail(h,MXB_PUB_FAULT);suppress(h,out,native_error);return native_result;
  }
- memset(h->chosen,0,h->tiles);size_t selected=0,last=h->cursor;
- for(size_t step=0;step<h->tiles&&selected<h->c.max_batch_tiles;step++){
+ memset(h->chosen,0,h->tiles);size_t selected=0,last=h->cursor,cap=h->c.max_batch_tiles;
+ /* send_interval_ms: nothing this call if the last batch went out less than the interval ago (every flagged
+    tile is put back below, exactly as the tiles over max_batch_tiles are) */
+ LARGE_INTEGER now;QueryPerformanceCounter(&now);if(h->gap_ticks&&now.QuadPart-h->last_send<h->gap_ticks)cap=0;
+ for(size_t step=0;step<h->tiles&&selected<cap;step++){
   size_t tile=(h->cursor+step)%h->tiles;
   if(snapshot[tile]){h->chosen[tile]=1;selected++;last=(tile+1)%h->tiles;}
  }
@@ -198,7 +207,7 @@ int mxb_publication_dirty(MxbPublicationHooks *h,int id,unsigned mode,unsigned c
  for(size_t tile=0;tile<h->tiles;tile++)if(!h->chosen[tile]){
   h->c.pending.dirty[tile]=h->before[tile];snapshot[tile]=0;deferred+=h->before[tile]!=0;
  }
- h->selected_count=selected;h->stats.last_selected_tiles=selected;h->stats.last_ledger_result=r;
+ h->selected_count=selected;h->stats.last_selected_tiles=selected;h->stats.last_ledger_result=r;if(selected)h->last_send=now.QuadPart;
  if(deferred)h->stats.backpressure_batches++;
  SetLastError(native_error);return native_result;
 }
@@ -222,7 +231,7 @@ int mxb_publication_run(MxbPublicationHooks *h,const void *slot,uintptr_t lo,uin
  DWORD incoming=GetLastError();
  if(!current_owner(h,thread)||!valid_return(&h->c.pacing,slot,lo,hi,(uintptr_t)h->c.pacing.exe+0x2a37fa)||
     InterlockedCompareExchange(&h->in_publisher,1,0)!=0){fail(h,MXB_PUB_FAULT);SetLastError(incoming);return 0;}
- h->stats.publisher_calls++;h->dirty_seen=0;h->selected_count=0;h->echo_count=0;memset(h->echo_seen,0,h->tiles);
+ h->stats.publisher_calls++;h->dirty_seen=0;h->selected_count=0;h->stats.last_selected_tiles=0;h->echo_count=0;memset(h->echo_seen,0,h->tiles);
  uint64_t prior_reservation=h->reservation;
  if(prior_reservation&&!h->faulted)fail(h,MXB_PUB_FAULT);
  if(!h->faulted&&!binding(h,1))fail(h,MXB_PUB_FAULT);

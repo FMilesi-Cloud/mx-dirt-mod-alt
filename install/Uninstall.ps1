@@ -9,8 +9,16 @@ function Say($m){ if($Quiet){ Write-Host $m } else { [Windows.Forms.MessageBox]:
 try{
     if(-not $GameDir){
         $d=$PSScriptRoot; for($i=0;$i -lt 4 -and $d;$i++){ if(Test-Path "$d\mxbikes.exe"){$GameDir=$d;break}; $d=Split-Path $d }
-        if(-not $GameDir){ $s=((Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath -replace '/','\')
-            foreach($r in @($s,"${env:ProgramFiles(x86)}\Steam")){ if($r -and (Test-Path "$r\steamapps\common\MX Bikes\mxbikes.exe")){$GameDir="$r\steamapps\common\MX Bikes";break} } } }
+        # every Steam library (games installed on another drive are listed in libraryfolders.vdf)
+        if(-not $GameDir){ $roots=@()
+            try{ $s=(Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath; if($s){ $s=$s -replace '/','\'; $roots+=$s
+                $vdf="$s\steamapps\libraryfolders.vdf"; if(Test-Path $vdf){ $roots+=(Select-String -Path $vdf -Pattern '"path"\s+"([^"]+)"' | ForEach-Object { $_.Matches[0].Groups[1].Value -replace '\\\\','\' }) } } }catch{}
+            $roots+="${env:ProgramFiles(x86)}\Steam"
+            foreach($r in $roots){ if($r -and (Test-Path "$r\steamapps\common\MX Bikes\mxbikes.exe")){$GameDir="$r\steamapps\common\MX Bikes";break} } }
+        # still not found: ask (Steam: right-click MX Bikes > Manage > Browse local files shows the folder)
+        if(-not $GameDir -and -not $Quiet){ $dlg=New-Object Windows.Forms.FolderBrowserDialog
+            $dlg.Description='Select your MX Bikes folder (the one with mxbikes.exe). In Steam: right-click MX Bikes > Manage > Browse local files.'
+            if($dlg.ShowDialog() -eq 'OK' -and (Test-Path "$($dlg.SelectedPath)\mxbikes.exe")){$GameDir=$dlg.SelectedPath} } }
     if(-not $GameDir){ throw 'MX Bikes folder not found. Run: Uninstall.ps1 -GameDir "<your MX Bikes folder>"' }
     if(Get-Process -Name mxbikes -ErrorAction SilentlyContinue){ throw 'Close MX Bikes first.' }
     $P="$GameDir\plugins"; $B="$([Environment]::GetFolderPath('MyDocuments'))\PiBoSo\MX Bikes\mx_dirt_mod_backups\uninstall-$(Get-Date -Format 'yyyyMMdd-HHmmss')"

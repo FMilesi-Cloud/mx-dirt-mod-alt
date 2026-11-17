@@ -62,6 +62,14 @@ typedef struct {
  int hook_fail_line,hook_result,ledger_fault_line;
 } MxbTransportState;
 
+/* Time spent in the game's own terrain update, owner thread: the native publisher call (split by the tiles it
+   handed over, 0..4) and each tile replacement inside it. */
+typedef struct {
+ uint64_t calls[5],over4[5],over8[5],over16[5],replaces;double total_ms[5],max_ms[5],replace_total_ms,replace_max_ms;
+} MxbTransportTiming;
+int mxb_transport_timing(const MxdirtTransport *,MxbTransportTiming *);
+/* see mxb_publication_hooks_pacing */
+int mxb_transport_pacing(MxdirtTransport *,size_t max_tiles,uint32_t interval_ms);
 MxdirtTransport *mxb_transport_create(const MxbTransportConfig *,const MxbTransportFacts *);
 /* First rejected startup predicate, captured synchronously on the owner.
    Strings are static; this report never borrows native memory. */

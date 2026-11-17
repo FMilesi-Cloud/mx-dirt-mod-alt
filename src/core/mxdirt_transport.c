@@ -15,11 +15,13 @@ struct MxdirtTransport {
  volatile LONG phase,faulted,inflight;int installed;int fault_line,fault_why;unsigned fault_detail;unsigned recoveries;
  MxbPubResult last;unsigned char *zero;MxbTransportTrace *trace;size_t trace_count,trace_dropped;
  uint64_t calls;MxbNativePublisher original_publisher;MxbNativeReplace original_replace;MxbPacingDirty original_dirty;
+ MxbTransportTiming timing;
 };
 static MxdirtTransport *volatile transport_bound;
 static const char transport_sha[]="9e792d7aed1dc40df11eea51d1a6d0519daec7be2b65609905df8c9de804a291";
 static LONG atomic_read(volatile LONG *v){return InterlockedCompareExchange(v,0,0);}
 static LONGLONG ticks(void){LARGE_INTEGER q;QueryPerformanceCounter(&q);return q.QuadPart;}
+static double ticks_ms(LONGLONG d){static LONGLONG f;if(!f){LARGE_INTEGER q;QueryPerformanceFrequency(&q);f=q.QuadPart>0?q.QuadPart:1;}return 1000.*(double)d/(double)f;}
 static int owner(const MxdirtTransport *t,DWORD thread){return t&&thread==t->pace.owner_thread&&thread==GetCurrentThreadId();}
 static int facts(const MxdirtTransport *t,const MxbTransportFacts *f,int stopped){
  return t&&f&&owner(t,f->owner_thread)&&f->generation==t->pace.generation&&f->offline_testing&&f->exact_track_profile&&f->pinned_lifetime&&
@@ -286,6 +288,12 @@ int mxb_transport_state(const MxdirtTransport *t,MxbTransportState *out){
  *out=(MxbTransportState){(MxbTransportPhase)t->phase,t->pace.generation,t->pace.owner_thread,t->owned,t->installed,t->excavation.exclusive,t->pace.bits,t->faulted,t->inflight,
   s.queued_targets,s.outstanding_native_events,t->trace_count,t->trace_dropped,s.allocated_bytes,s.last_enqueued_sequence,s.locally_issued_sequence,h.sent_batches,h.echo_batches,t->excavation.suppressed,t->last,t->fault_line,t->fault_why,t->fault_detail,h.fail_line,(int)h.last_ledger_result,s.fault_line};return 1;
 }
+int mxb_transport_timing(const MxdirtTransport *t,MxbTransportTiming *out){
+ if(!t||!out||!owner(t,GetCurrentThreadId()))return 0;*out=t->timing;return 1;
+}
+int mxb_transport_pacing(MxdirtTransport *t,size_t max_tiles,uint32_t interval_ms){
+ return t&&owner(t,GetCurrentThreadId())&&mxb_publication_hooks_pacing(t->hooks,max_tiles,interval_ms);
+}
 const MxbTransportTrace *mxb_transport_trace(const MxdirtTransport *t,const MxbTransportFacts *f,size_t *count){
  if(!count||!facts(t,f,1))return NULL;*count=t->trace_count;return t->trace;
 }
@@ -294,7 +302,9 @@ int mxb_transport_publisher(MxdirtTransport *t,const void *slot,uintptr_t lo,uin
  if((t->phase==MXB_TRANSPORT_ACTIVE||t->phase==MXB_TRANSPORT_PAUSED)&&!owned_all(t))fault(t,MXB_PUB_FAULT);
  SetLastError(incoming);int result=mxb_publication_run(t->hooks,slot,lo,hi,thread);DWORD outgoing=GetLastError();
  health(t,thread);if(owner(t,thread)){t->calls++;MxbPublicationHookState h;mxb_publication_hooks_state(t->hooks,&h);
-  if(t->calls<=8||h.last_selected_tiles||t->faulted)record(t,9,result,0,start);}
+  if(t->calls<=8||h.last_selected_tiles||t->faulted)record(t,9,result,0,start);
+  {const double ms=ticks_ms(ticks()-start);const size_t k=h.last_selected_tiles<4?h.last_selected_tiles:4;MxbTransportTiming *g=&t->timing;
+   g->calls[k]++;g->total_ms[k]+=ms;if(ms>g->max_ms[k])g->max_ms[k]=ms;g->over4[k]+=ms>4.;g->over8[k]+=ms>8.;g->over16[k]+=ms>16.;}}
  InterlockedDecrement(&t->inflight);SetLastError(outgoing);return result;
 }
 int mxb_transport_receive(MxdirtTransport *t,int id,const int32_t *full,int tile,const void *slot,uintptr_t lo,uintptr_t hi,DWORD thread){
@@ -302,7 +312,9 @@ int mxb_transport_receive(MxdirtTransport *t,int id,const int32_t *full,int tile
  if((t->phase==MXB_TRANSPORT_ACTIVE||t->phase==MXB_TRANSPORT_PAUSED)&&!owned_all(t))fault(t,MXB_PUB_FAULT);
  if(t->faulted&&id==1){InterlockedDecrement(&t->inflight);SetLastError(incoming);return 1;}
  SetLastError(incoming);int result=mxb_publication_receive(t->hooks,id,full,tile,slot,lo,hi,thread);DWORD outgoing=GetLastError();
- health(t,thread);if(id==1)record(t,10,result,(uint32_t)tile,start);InterlockedDecrement(&t->inflight);SetLastError(outgoing);return result;
+ health(t,thread);if(id==1){record(t,10,result,(uint32_t)tile,start);
+  if(owner(t,thread)){const double ms=ticks_ms(ticks()-start);t->timing.replaces++;t->timing.replace_total_ms+=ms;if(ms>t->timing.replace_max_ms)t->timing.replace_max_ms=ms;}}
+ InterlockedDecrement(&t->inflight);SetLastError(outgoing);return result;
 }
 int mxb_transport_dirty(MxdirtTransport *t,int side,int id,unsigned mode,unsigned char **out,const int32_t *range,const void *slot,uintptr_t lo,uintptr_t hi,DWORD thread){
  if(!t||side<0||side>1)return 1;DWORD incoming=GetLastError();InterlockedIncrement(&t->inflight);int result;

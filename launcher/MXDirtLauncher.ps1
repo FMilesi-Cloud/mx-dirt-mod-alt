@@ -78,6 +78,7 @@ $Num=@(
   @('active','soil','soft_layer_mm','Soft dirt layer (mm)',0,100,85,'Loose top soil your tyres press marks into, with lips, roost crumbs and knob prints. Look only, the ruts you ride are unchanged. 0 = off.'),
   @('renderer','renderer','dirt_strength','Dirt look strength (%)',0,200,135,'How strongly worked dirt is shaded.'),
   @('renderer','renderer','dirt_relief','Rut and bump contrast (%)',0,200,100,'Darker rut floors and bump troughs by depth, lighter berm tops and lips. Works in flat light and from far away. 0 = off.'),
+  @('renderer','renderer','soft_lift_percent','Soft dirt height (%)',0,100,100,'How high the loose top soil sits above the ground. Lower if the ruts seem to slide when seen up close (fender cam, replays). Applies live.'),
   @('renderer','renderer','dirt_fade_end','Dirt look distance (m)',10,100,100,'Distance where the dirt shading fades out (max 100).')
 )
 $Chk=@(

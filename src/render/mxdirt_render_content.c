@@ -98,14 +98,14 @@ static int rc_look_read(int startup){
  UINT fade_start=GetPrivateProfileIntW(L"renderer",L"dirt_fade_start",75,rc_ini),fade_end=GetPrivateProfileIntW(L"renderer",L"dirt_fade_end",100,rc_ini);
  /* 45..60 was the default and the most the smaller window of 1.5 could show: a settings file that still says so gets today's default */
  if(fade_start==45&&fade_end==60){fade_start=75;fade_end=100;}
- UINT relief=GetPrivateProfileIntW(L"renderer",L"dirt_relief",100,rc_ini);
- const int valid=dirt<=1&&strength<=200&&loose<=100&&fade_start<fade_end&&fade_end<=100&&relief<=200;
+ UINT relief=GetPrivateProfileIntW(L"renderer",L"dirt_relief",100,rc_ini),lift=GetPrivateProfileIntW(L"renderer",L"soft_lift_percent",100,rc_ini);
+ const int valid=dirt<=1&&strength<=200&&loose<=100&&fade_start<fade_end&&fade_end<=100&&relief<=200&&lift<=100;
  if(!valid&&!startup)return 0;
  rc_soft=GetPrivateProfileIntW(L"renderer",L"soft_layer",1,rc_ini)!=0;
  rc_soft_solid=GetPrivateProfileIntW(L"renderer",L"soft_solid",1,rc_ini)!=0;rc_tyre_sink=GetPrivateProfileIntW(L"renderer",L"tyre_sink",1,rc_ini)!=0;
  /* An invalid dirt key disables only this pass, never the renderer. */
  rc_dirt=dirt==1&&valid;
- if(valid){rc_look.strength=(float)strength/100.f;rc_look.base_loose=(float)loose/100.f;rc_look.fade_start=(float)fade_start;rc_look.fade_end=(float)fade_end;rc_look.relief=(float)relief/100.f;}
+ if(valid){rc_look.strength=(float)strength/100.f;rc_look.base_loose=(float)loose/100.f;rc_look.fade_start=(float)fade_start;rc_look.fade_end=(float)fade_end;rc_look.relief=(float)relief/100.f;rc_look.lift=(float)lift/100.f;}
  /* launcher_key = F1..F12 (default F10); anything else = no key */
  {wchar_t k[8];GetPrivateProfileStringW(L"renderer",L"launcher_key",L"F10",k,8,rc_ini);int n=(k[0]==L'F'||k[0]==L'f')?_wtoi(k+1):0;rc_key=n>=1&&n<=12?VK_F1+n-1:0;}
  return 1;

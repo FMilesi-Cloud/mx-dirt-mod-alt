@@ -136,6 +136,10 @@ int mxdirt_update(MxDirt *d,const MxDirtInput *in,MxDirtWindow *out,MxDirtStats 
  const int32_t bz0=clampi(d->first_z+MXDIRT_MARGIN,0,(int32_t)in->height-1),bz1=clampi(d->first_z+MXDIRT_MARGIN+MXDIRT_CELLS,0,(int32_t)in->height-1);
  out->bounds[0]=(float)(in->origin[0]+bx0*sx);out->bounds[1]=(float)(in->origin[2]+bz0*sz);
  out->bounds[2]=(float)(in->origin[0]+bx1*sx);out->bounds[3]=(float)(in->origin[2]+bz1*sz);
+ /* a bound where the window ends inside the track fades over half the window's half-width; one at the edge of
+    the track itself keeps the short default */
+ {const float rx=(float)(.25*MXDIRT_CELLS*sx),rz=(float)(.25*MXDIRT_CELLS*sz);
+  out->ramp[0]=bx0>0?rx:0.f;out->ramp[1]=bz0>0?rz:0.f;out->ramp[2]=bx1<(int32_t)in->width-1?rx:0.f;out->ramp[3]=bz1<(int32_t)in->height-1?rz:0.f;}
  for(unsigned c=0;c<3;c++)out->camera[c]=(float)camera[c];
  out->texels=d->texels;out->dirty=&d->dirty;out->changed=(uint32_t)changed;out->recentered=(uint32_t)recentre;
  st->recentered=out->recentered;st->changed=out->changed;st->stage=MXDIRT_OK;return 1;

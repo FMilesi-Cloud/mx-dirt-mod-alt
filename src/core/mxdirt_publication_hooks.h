@@ -56,6 +56,10 @@ int mxb_publication_hooks_retire(MxbPublicationHooks *,int old_track_and_transpo
 int mxb_publication_hooks_destroy(MxbPublicationHooks *);
 int mxb_publication_hooks_state(const MxbPublicationHooks *,MxbPublicationHookState *);
 int mxb_publication_hooks_recover(MxbPublicationHooks *,DWORD owner_thread);
+/* How terrain tiles are handed to the game: at most max_tiles per native publisher call (1..the configured
+   max_batch_tiles) and, with interval_ms > 0, a batch at most every interval_ms (tiles wait, flagged, in the
+   game's own dirty list meanwhile). Owner thread, outside the publisher. */
+int mxb_publication_hooks_pacing(MxbPublicationHooks *,size_t max_tiles,uint32_t interval_ms);
 
 /* Exact ABI entrypoints for the callsite and client stream4 DirtyFn slot. */
 int mxb_publication_publisher_entry(void);

@@ -257,7 +257,7 @@ Open **MX Dirt Mod** from your desktop. If the shortcut is missing, run `MX Bike
   - Medium: about 15 of your laps wear a track like the Practice level.
   - Arcade (hero dirt): not realistic, just fun. Wear builds twice as fast; deep, grippy ruts and tall berms you can rail; less chop; the dirt stays damp all session. Picking it also fills in its own rut depth (80), moisture (45), rolling bumps (30), soft layer (100 mm), look strength (160) and starting wear (End of day), and writes rut capture 150, wall cohesion 150, packed hardness 70, braking bumps 60, drying 0 and roost clods 200 to `mx_dirt.ini`. Picking Realistic or Medium again puts all of them back.
 - **Dirt:** rut depth, track firmness, moisture, rolling bumps, lines riding with you, and the soft dirt layer thickness.
-- **Look:** dirt look strength and distance, rut and bump contrast, dirt shading on/off.
+- **Look:** dirt look strength and distance, rut and bump contrast, soft dirt height, dirt shading on/off.
 - **Record my laps:** needed for pre-wear.
 - **Keep saved wear:** pre-wear only fresh tracks. Turn it off to wear the track again on every load, so wear stacks up.
 - **Online wear:** experimental and untested. See [Online wear](#8-online-wear-experimental-untested).
@@ -316,6 +316,8 @@ All settings live in two text files in `MX Bikes\plugins`, with comments. The la
 | `follow_game_deformation` | 1 | 0/1 | Rut depth follows the in-game Deformation slider. |
 | `game_deformation_reference_percent` | 25 | 1–200 | Slider value at which rut depth applies unchanged. |
 | `sand_tracks` | (empty) | text | Track-name fragments to treat as sand, comma separated. |
+| `[terrain] batch_tiles` | 4 | 1–4 | Pieces of worn track (64 × 64 cells) handed to the game at once. |
+| `[terrain] send_interval_ms` | 0 | 0–250 | Least time between two hand-overs (0 = whenever something changed). |
 | `[online] online_wear` | 0 | 0/1 | Experimental, untested: run in online races and let the other riders wear the track. |
 | `[debug] dump_terrain` | 0 | 0/1 | Save each track's terrain for offline analysis. |
 | `[debug] online_echo` | 0 | 0/1 | Test of the online riders in Testing: a copy of your bike rides 3 m beside you. |
@@ -335,6 +337,7 @@ An out-of-range value switches the simulation off for that game start, and the r
 | `dirt_fade_start` / `dirt_fade_end` | 75 / 100 | Distance (m) where the look fades out; the end is 100 at most (the dirt is drawn about 95 m ahead, 65 m to the sides). A file that still has the old 45 / 60 is read as 75 / 100 (for 60 m write 44 / 60; the launcher does). |
 | `soft_layer` | 1 | Draw the soft dirt layer. |
 | `soft_solid` | 1 | The ground texture follows the soft layer's relief (0 = relief shading only). |
+| `soft_lift_percent` | 100 | How high the untouched soft layer sits above the game's ground, 0–100 %. Lower it if ruts seem to slide when seen up close (fender camera, replays). At 0, ground nobody rode is drawn exactly as the game draws it. |
 | `tyre_sink` | 1 | Tyres sink into raised loose soil (0 = they are drawn on top of it). |
 | `raised_dirt_surface` | 1 | Raised-dirt surface fix. |
 | `content_log` | `plugins\mx_dirt_render.log` | Diagnostic log; empty = none. |
@@ -398,6 +401,10 @@ If a new release adds new settings, they use their defaults until you change the
 - Open `plugins\mx_dirt_render.log`. A `dirt_disabled` line says why the look is off.
 
 **Loading a fresh track takes longer.** That's pre-wear riding 50 virtual riders: around 10 seconds, and only on a fresh track. Lower *Starting wear* to speed it up.
+
+**Frame drops or stutter while riding.** Version 1.7.1 removed the main cause (see the release notes). If it still stutters, close MX Bikes after riding and attach `plugins\mx_dirt.jsonl` and `plugins\mx_dirt_render.log`: the `terrain_timing` line shows how long the game spent on the mod's track updates.
+
+**The uninstaller can't find MX Bikes.** Since 1.7.1 it looks in every Steam library and then asks for the folder. In Steam: right-click MX Bikes > Manage > Browse local files shows it.
 
 **The installer says "Close MX Bikes first".** The game, or a stuck `mxbikes.exe`, is still running. End it in Task Manager.
 
@@ -472,7 +479,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.7.0   # both + the release zip in build\
+.\package.ps1 -Version 1.7.1   # both + the release zip in build\
 ```
 
 Source layout:

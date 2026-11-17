@@ -49,6 +49,7 @@ typedef struct {
  float spacing_x,spacing_z,height_scale;
  float texel0[3];                /* world x/z of window texel(0,0), y = grid origin */
  float bounds[4];                /* world xmin,zmin,xmax,zmax of the window's cells that lie on the grid */
+ float ramp[4];                  /* metres over which the look fades in from each bound (0 = the shader's default) */
  float camera[3];
  const uint16_t *texels;         /* SIDE*SIDE*2 interleaved current,base, in storage order */
  MxDirtDirty *dirty;             /* texels to upload; the uploader clears it */

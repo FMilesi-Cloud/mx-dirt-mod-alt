@@ -83,6 +83,8 @@ static unsigned ra_dirt_sim_depth=60,ra_dirt_sim_firmness=55,ra_dirt_sim_moistur
 static unsigned ra_bumps_percent=100,ra_rolling_bumps_percent=60;
 static unsigned ra_hardness_percent=100,ra_breakdown_percent=100,ra_drying_percent=100,ra_sweep_percent=100;
 static unsigned ra_extra_riders=0,ra_live_gate=1,ra_live_wear=0;
+/* [terrain]: how worn tiles are handed to the game (see mxb_publication_hooks_pacing) */
+static unsigned ra_batch_tiles=4,ra_send_interval=0;
 /* Online wear (EXPERIMENTAL, [online] online_wear=1): active in online race events too, and the other riders wear the track
    (mxdirt_remote.h). ra_online: this event is a race. No pre-wear, ghosts, lap recording or saved soil / marks there. */
 static unsigned ra_online_wear=0,ra_online_echo=0;static int ra_online;
@@ -323,6 +325,12 @@ static void ra_flush(void) {
    (unsigned long long)s.accepted_sequence,(unsigned long long)s.locally_issued_sequence,
    (unsigned long long)s.sent_batches,(unsigned long long)s.echo_batches,(unsigned long long)s.suppressed_excavations,
    (unsigned long long)ra_publish_offers,(unsigned long long)ra_publish_deferred,(unsigned long long)ra_publish_accepted,s.trace_dropped);
+ {MxbTransportTiming g;if(ra_transport&&mxb_transport_timing(ra_transport,&g)){
+  fprintf(ra_log,"{\"active\":true,\"kind\":\"terrain_timing\",\"batch_tiles\":%u,\"send_interval_ms\":%u,\"replaces\":%llu,\"replace_mean_ms\":%.4f,\"replace_max_ms\":%.3f,\"by_tiles\":[",
+   ra_batch_tiles,ra_send_interval,(unsigned long long)g.replaces,g.replaces?g.replace_total_ms/(double)g.replaces:0.,g.replace_max_ms);
+  for(int k=0;k<5;k++)fprintf(ra_log,"%s{\"tiles\":%d,\"calls\":%llu,\"mean_ms\":%.4f,\"max_ms\":%.3f,\"over4\":%llu,\"over8\":%llu,\"over16\":%llu}",k?",":"",k,
+   (unsigned long long)g.calls[k],g.calls[k]?g.total_ms[k]/(double)g.calls[k]:0.,g.max_ms[k],(unsigned long long)g.over4[k],(unsigned long long)g.over8[k],(unsigned long long)g.over16[k]);
+  fprintf(ra_log,"]}\n");}}
  fprintf(ra_log,"{\"active\":true,\"kind\":\"startup_bootstrap\",\"phase\":%d,\"cancelled\":%ld,\"receive_owned\":%d,\"excavation_owned\":%d,\"elapsed_running_ms\":%llu,\"receive_calls\":%llu,\"full_attempts\":%llu,\"suppressed_new_excavations\":%llu}\n",
   ra_bootstrap_phase,ra_bootstrap_cancel,ra_bootstrap_hooks[0].owned,ra_bootstrap_hooks[1].owned,
   (unsigned long long)ra_bootstrap_elapsed,(unsigned long long)ra_bootstrap_calls,(unsigned long long)ra_bootstrap_attempts,(unsigned long long)ra_bootstrap_suppressed);
@@ -821,6 +829,7 @@ static int ra_prepare_transport(void) {
  /* Another native terrain writer (MX's own tyre digging) is adopted per tile
     instead of faulting the whole ledger: no global resync hitch, no shutdown. */
  if(ra_transport)mxb_transport_set_adopt_foreign(ra_transport,1);
+ if(ra_transport)(void)mxb_transport_pacing(ra_transport,ra_batch_tiles,ra_send_interval);
  if(ra_log&&!ra_bootstrap_gap){fprintf(ra_log,"{\"active\":true,\"kind\":\"transport_create\",\"generation\":%llu,\"stage\":\"%s\",\"side\":%d,\"succeeded\":%s}\n",(unsigned long long)ra_generation,report.stage,report.side,ra_transport?"true":"false");fflush(ra_log);}
  if(!ra_transport){ra_bootstrap_requested=!strcmp(report.stage,"host_source_mismatch")||!strcmp(report.stage,"stream_last_mismatch")||!strcmp(report.stage,"pending_not_zero")||!strcmp(report.stage,"dirty_flags_not_zero");ra_mark(RA_TRANSPORT,-1);return 0;}
  /* Prepare the solver only after the native streams agree. An earlier loading
@@ -912,6 +921,7 @@ static const RaSetting ra_settings[]={
  {"soil","extra_riders",0,0,15,&ra_extra_riders},{"soil","ghost_riders",0,0,MXDIRT_SESSION_MAX_GHOSTS,&ra_ghost_riders},
  {"soil","record_ghosts",1,0,1,&ra_record_ghosts},{"soil","follow_game_deformation",1,0,1,&ra_follow_game_deformation},
  {"soil","game_deformation_reference_percent",25,1,200,&ra_game_deformation_reference},{"soil","live_wear_percent",0,0,200,&ra_live_wear},
+ {"terrain","batch_tiles",4,1,4,&ra_batch_tiles},{"terrain","send_interval_ms",0,0,250,&ra_send_interval},
  {"online","online_wear",0,0,1,&ra_online_wear},{"debug","online_echo",0,0,1,&ra_online_echo},{"debug","dump_terrain",0,0,1,&ra_dump_terrain},
 };
 enum { RA_SETTINGS=sizeof(ra_settings)/sizeof(*ra_settings) };
@@ -942,6 +952,8 @@ static void ra_settings_live(void){
   hard=ra_hardness_percent,breakdown=ra_breakdown_percent,drying=ra_drying_percent,sweep=ra_sweep_percent,capture=ra_capture_percent,
   cohesion=ra_cohesion_percent,clods=ra_clods_percent,gate=ra_live_gate,wear=ra_live_wear;
  const int ok=ra_settings_load();int applied=0;
+ /* terrain pacing changes nothing in the simulation: live in every session, online too */
+ if(ok&&ra_transport)(void)mxb_transport_pacing(ra_transport,ra_batch_tiles,ra_send_interval);
  if(ok&&ra_session&&!ra_online){
   MxdirtLiveSettings t;float *f=(float*)&t;for(unsigned k=0;k<sizeof(t)/sizeof(float);k++)f[k]=-1.f;
   if(depth!=ra_dirt_sim_depth){float d=(float)ra_dirt_sim_depth; /* x this session's Deformation slider factor, as ra_game_depth */

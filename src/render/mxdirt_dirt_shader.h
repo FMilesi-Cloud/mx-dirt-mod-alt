@@ -69,7 +69,7 @@ static const char mxdirt_fragment_version[]="#version 330 compatibility\n";
 static const char mxdirt_fragment_sink[]="#define SINK 1\n";
 static const char mxdirt_fragment_body[]=
  "uniform sampler2D heights,background,clods;uniform ivec2 viewport_origin;uniform mat4 view,projection;uniform vec3 texel0;"
- "uniform vec2 spacing,fade,shift;uniform vec4 bounds;uniform vec3 camera;uniform float height_scale,strength,base_grain,relief;"
+ "uniform vec2 spacing,fade,shift;uniform vec4 bounds,ramp;uniform vec3 camera;uniform float height_scale,strength,base_grain,relief,soft_lift;"
  "uniform sampler2D state;uniform int state_on;"
  "uniform sampler2D soft;uniform int soft_on,soft_mode;uniform vec2 soft_origin;uniform vec4 soft_window;uniform float soft_cell,soft_depth,soft_unit;"
  /* perf: one texel per soft tile slot (64x64, wraps like the window): 0 = no soft texel within one tile
@@ -97,8 +97,9 @@ static const char mxdirt_fragment_body[]=
     of sparkling as it shrinks. */
  "vec2 p=w.xz,dpx=dFdx(p),dpy=dFdy(p);float px=max(length(dpx),length(dpy)),pa=sqrt(abs(dpx.x*dpy.y-dpx.y*dpy.x));"
  "float dist=distance(w,camera);"
- "float edge=min(min(w.x-bounds.x,bounds.z-w.x),min(w.z-bounds.y,bounds.w-w.z));"
- "float amount=(1.-smoothstep(fade.x,fade.y,dist))*smoothstep(0.," MXDIRT_STR(MXDIRT_EDGE_FADE) ",edge)*strength;"
+ /* fades in from each bound over ramp metres: long where the moving window ends, short at the track's edge */
+ "vec4 ef=smoothstep(vec4(0.),ramp,vec4(w.x-bounds.x,w.z-bounds.y,bounds.z-w.x,bounds.w-w.z));"
+ "float amount=(1.-smoothstep(fade.x,fade.y,dist))*ef.x*ef.y*ef.z*ef.w*strength;"
  "if(amount<=.003)discard;"
  "ivec2 pix=ivec2(gl_FragCoord.xy)-viewport_origin;"
  /* Soft top layer, first: the view ray is marched down through it (parallax). The layer lies ON the ridden
@@ -119,14 +120,14 @@ static const char mxdirt_fragment_body[]=
     distance a pixel is long ALONG them and still narrow ACROSS them: the fade goes by the square root of the
     pixel's ground area (MXDIRT_SOFT_FADE cells: start,end), not by its longest side, which hid the relief
     6-13 m ahead of a chase camera - close enough to watch it appear. */
- "s_vis=smoothstep(.5,3.,se)*(1.-smoothstep(soft_cell*" MXDIRT_STR(MXDIRT_SOFT_FADE_START) ",soft_cell*" MXDIRT_STR(MXDIRT_SOFT_FADE_END) ","
+ "s_vis=smoothstep(.5,10.,se)*(1.-smoothstep(soft_cell*" MXDIRT_STR(MXDIRT_SOFT_FADE_START) ",soft_cell*" MXDIRT_STR(MXDIRT_SOFT_FADE_END) ","
 #if MXDIRT_SOFT_FADE_AREA
   "pa"
 #else
   "px"
 #endif
  "));s_q=sl;"
- "if(s_vis>.01){vec3 Vs=normalize(camera-w);vec2 dv=Vs.xz/max(Vs.y,.2);float so=.6*soft_depth,top=so+min(127.*soft_unit,soft_depth*1.7),bot=so-min(127.*soft_unit,soft_depth*2.);"
+ "if(s_vis>.01){vec3 Vs=normalize(camera-w);vec2 dv=Vs.xz/max(Vs.y,.2);float so=.6*soft_depth*soft_lift,top=so+min(127.*soft_unit,soft_depth*1.7),bot=so-min(127.*soft_unit,soft_depth*2.);"
  "float yh=so;"
  "if(texelFetch(soft_occ,ivec2(floor((sl+dv*(.5*(top+so)-(top-bot)/32.))/soft_tile))&ivec2(63),0).r>0.){"
  "float yp=top,hp=SH(sl+dv*top)+so;yh=bot;"
@@ -136,7 +137,8 @@ static const char mxdirt_fragment_body[]=
  "if(s_up<.004)discard;vec4 c=projection*view*vec4(w+Vs*(s_up/max(Vs.y,.2)),1.);gl_FragDepth=clamp(c.z/max(c.w,1e-4)*.5+.5,0.,1.);color=vec4(0.);return;}}"
  "discard;}"
  "\n#else\n"
- "if((soft_mode&1)!=0){g+=sh/spacing;w.xz+=sh;p=w.xz;"
+ /* no shift (untouched layer at soft_lift 0): the game's own pixel, not a re-projected neighbour */
+ "if((soft_mode&1)!=0&&dot(sh,sh)>4e-6){g+=sh/spacing;w.xz+=sh;p=w.xz;"
  "float hy=texture(heights,(g+shift)/SIDE).r*height_scale;vec4 c=projection*view*vec4(p.x,texel0.y+hy+.004,p.y,1.);"
  "if(c.w>.05){vec2 n=c.xy/c.w;if(abs(n.x)<.999&&abs(n.y)<.999)pix=ivec2((n*.5+.5)*vec2(textureSize(background,0)));}}}}"
  "vec3 native=texelFetch(background,pix,0).rgb;"
@@ -224,13 +226,15 @@ static const char mxdirt_fragment_body[]=
     the camera the view ray is marched down through it (parallax), so trenches
     read deep and lips stand up; lit from its own slopes and shadowed by them.
     Untouched layer: the native gravel grain softened into fine loose crumbs. */
- "float s_h=0.,s_press=0.,s_lip=0.,s_shade=1.,s_cav=0.,s_lay=0.,s_new=0.;"
+ "float s_h=0.,s_press=0.,s_lip=0.,s_shade=1.,s_cav=0.,s_lay=0.,s_new=0.,s_touch=0.;"
  "if(soft_on!=0){s_lay=1.-green;"
  /* everything read below lies within one tile of the middle of the sun-shadow stretch: clear there = flat, untouched layer */
  "if(s_vis>.01&&texelFetch(soft_occ,ivec2(floor((s_q+L.xz/max(L.y,.12)*.044)/soft_tile))&ivec2(63),0).r>0.){"
  "vec2 q=s_q;float c=soft_cell;s_h=SH(q);"
  "vec2 sg=vec2(SH(q+vec2(c,0))-SH(q-vec2(c,0)),SH(q+vec2(0,c))-SH(q-vec2(0,c)))/(2.*c);"
  "s_cav=(SH(q+vec2(2.5*c,0))+SH(q-vec2(2.5*c,0))+SH(q+vec2(0,2.5*c))+SH(q-vec2(0,2.5*c)))*.25-s_h;"
+ /* soil a tyre moved: off the rest height here or right beside it */
+ "s_touch=smoothstep(.0008,.004,abs(s_h)+abs(s_cav));"
  "if(L.y<.97){vec2 sd=L.xz/max(L.y,.12);float occ=0.;"
  "for(int i=1;i<=8;i++){float d=.011*float(i);occ=max(occ,clamp((SH(q+sd*d)-s_h-d)/.005,0.,1.)*(1.-float(i)/10.));}s_shade=1.-.42*occ;}"
  "s_press=smoothstep(.2,.65,-s_h/soft_depth);s_lip=smoothstep(.001,.007,s_h);"
@@ -252,8 +256,10 @@ static const char mxdirt_fragment_body[]=
  "micro+=(sg*(.8+.2*s_new)+kg)*s_vis;" /* settled soil softens a little, fresh soil is crisp */
  /* dry soil: lips and trench walls crumble into loose grains */
  "micro+=turn((k1.rg-.5)*2.,0.)*.35*s_lip*(1.-damp)*f_big*s_vis;}"
- /* loose soil reads soft: texture grain averaged, fine crumbs; pressed floors smooth */
- "float sl_loose=s_lay*(1.-s_press*s_vis)*(1.-.6*worked);"
+ /* loose soil reads soft: texture grain averaged, fine crumbs; pressed floors smooth. Only soil the tyres
+    moved, fading with the relief: untouched layer is drawn exactly as the game draws the ground (all of it
+    inside the layer's ~51 m window showed as a square of different ground following the bike). */
+ "float sl_loose=s_lay*s_touch*s_vis*(1.-s_press)*(1.-.6*worked);"
  "albedo=mix(albedo,blur/bw,.18*sl_loose);micro+=turn((k2.rg-.5)*2.,-.83)*.16*sl_loose*f_mid;}"
  /* roost clods: lumps on a jittered 11 cm lattice, present where the sim's clod
     density at the lump's own centre beats its random rank; lit as domes with a
@@ -261,17 +267,18 @@ static const char mxdirt_fragment_body[]=
     Each lump fades by its OWN size on screen (lv: full at ~5 pixels across its short side, gone under ~2).
     They are drawn shapes, not a mip-mapped texture: any smaller and a lump falls between pixel rows and
     flashes as a dark speck while riding (seen 4-12 m ahead at a 124 degree field of view). */
- "float lump=0.,lshade=1.;vec2 lslope=vec2(0);"
+ "float lump=0.,lshade=1.,lvis=0.;vec2 lslope=vec2(0);"
  "if(state_on!=0&&s_clod>.004&&px<.055){"
  "vec2 ci=floor(p/.11),sh=L.xz/max(L.y,.3);"
  "for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){"
  "vec2 id=ci+vec2(i,j);vec3 r=rnd(id);vec2 cw=(id+.15+.7*r.xy)*.11;"
  "if(.001+.999*r.z>textureLod(state,(g+(cw-p)/spacing+shift)/SIDE,0.).a*1.15)continue;"
- "float rad=(.012+.026*fract(r.x*7.31+r.y*3.17))*(.8+.45*damp),lv=1.-smoothstep(.4*rad,1.1*rad,px);if(lv<=0.)continue;vec2 d=p-cw;float t=length(d)/rad;"
- "if(t<1.){float hgt=sqrt(1.-t*t);if(hgt*lv>lump){lump=hgt*lv;lslope=-d/(rad*max(hgt,.25));}}"
+ "float rad=(.012+.026*fract(r.x*7.31+r.y*3.17))*(.8+.45*damp),lv=1.-smoothstep(.35*rad,1.6*rad,px);if(lv<=0.)continue;vec2 d=p-cw;float t=length(d)/rad;"
+ "if(t<1.){float hgt=sqrt(1.-t*t);if(hgt*lv>lump){lump=hgt*lv;lvis=lv;lslope=-d/(rad*max(hgt,.25));}}"
  "lshade=min(lshade,mix(1.,mix(.6,1.,smoothstep(.5,1.05,length(p-(cw-sh*rad*.8))/(rad*1.1))),lv));}"
  "if(lump>0.)lshade=1.;"
- "micro=mix(micro,lslope*1.3,smoothstep(0.,.25,lump));}"
+  /* a far lump keeps its shape and fades in by opacity (lvis), so it never appears at full contrast */
+ "micro=mix(micro,lslope*1.3,smoothstep(0.,.25,lump/max(lvis,1e-3))*lvis);}"
  "vec3 nb=normalize(vec3(-base_slope.x,1.,-base_slope.y));"
  "vec3 nd=normalize(vec3(-(sharp_slope.x+.3*dslope.x+micro.x),1.,-(sharp_slope.y+.3*dslope.y+micro.y)));"
  /* sun shadows from the deformation only: occlusion along the sun ray over

@@ -20,6 +20,7 @@ struct MxbHeightPublication {
  CellInterval *intervals;uint32_t *tile_scratch;uint64_t *matches;
  int adopt_foreign;uint64_t foreign_tiles;
  uint32_t adopted_ring[256];uint64_t adopted_n; /* v8.8: adopted tiles, so the session can resend them */
+ uint32_t verify_slice; /* rotating slice of the per-call consistency checks (VERIFY_SLICES) */
 };
 /* Exact equality, not a hash or sampled check. Unaligned loads and scalar tail
    stay within the requested span. SSE2 is baseline on the supported x64 host. */
@@ -174,11 +175,23 @@ MxbPubResult mxb_pub_enqueue_sparse(MxbHeightPublication *p,uint64_t generation,
 static int pending_exact(const MxbHeightPublication *p,const MxbPendingView *v){
  return view_shape(p,v,p->generation)&&private_range_exact(p,v->pending,p->shadow,0,p->cells);
 }
+/* Per-call consistency checks read one rotating slice of the grid: a whole-grid pass is 16-32 MB and ran
+   several times per terrain hand-over (~3-6 ms each in the game, one long frame per hand-over). Every
+   cell is still compared once per VERIFY_SLICES checks; what concerns the tiles in flight stays exact. */
+#ifndef VERIFY_SLICES
+#define VERIFY_SLICES 64u
+#endif
+static void verify_range(MxbHeightPublication *p,size_t *lo,size_t *hi){
+ const size_t k=p->verify_slice++%VERIFY_SLICES;*lo=p->cells*k/VERIFY_SLICES;*hi=p->cells*(k+1)/VERIFY_SLICES;
+}
+static int pending_slice_exact(MxbHeightPublication *p,const MxbPendingView *v){
+ size_t lo,hi;if(!view_shape(p,v,p->generation))return 0;verify_range(p,&lo,&hi);return private_range_exact(p,v->pending,p->shadow,lo,hi);
+}
 MxbPubResult mxb_pub_issue(MxbHeightPublication *p,MxbPendingView *v,int exclusive,MxbPubIssueReceipt *receipt){
  MxbPubResult r=ready(p);if(r!=MXB_PUB_OK)return r;
  if(!receipt||!view_shape(p,v,p->generation))return MXB_PUB_INVALID;
  if(!exclusive)return fault(p);if(p->reservation)return MXB_PUB_BUSY;
- if(!pending_exact(p,v))return fault(p);
+ if(!pending_slice_exact(p,v))return fault(p);
  MxbPubIssueReceipt out;memset(&out,0,sizeof(out));out.generation=p->generation;out.issued_sequence=p->issued_sequence;
  if(!p->qcount){*receipt=out;return MXB_PUB_NO_CHANGE;}
  const int32_t *target=p->sparse_cap?NULL:p->targets+p->qhead*p->cells;size_t count=0;
@@ -234,13 +247,14 @@ static void build_intervals(MxbHeightPublication *p,const uint32_t *tiles,size_t
   begin=end;
  }
 }
-static int outside_exact(const MxbHeightPublication *p,const int32_t *a,const int32_t *b){
- size_t cursor=0;
- for(size_t i=0;i<p->interval_count;i++){
-  size_t next=p->intervals[i].start;
-  if(!private_range_exact(p,a,b,cursor,next))return 0;cursor=p->intervals[i].end;
+/* a == b outside the intervals, within one rotating slice of the grid (VERIFY_SLICES) */
+static int outside_exact(MxbHeightPublication *p,const int32_t *a,const int32_t *b){
+ size_t lo,hi,cursor;verify_range(p,&lo,&hi);cursor=lo;
+ for(size_t i=0;i<p->interval_count&&cursor<hi;i++){
+  size_t next=p->intervals[i].start<hi?p->intervals[i].start:hi;
+  if(next>cursor&&!private_range_exact(p,a,b,cursor,next))return 0;if(p->intervals[i].end>cursor)cursor=p->intervals[i].end;
  }
- return private_range_exact(p,a,b,cursor,p->cells);
+ return cursor>=hi||private_range_exact(p,a,b,cursor,hi);
 }
 static MxbPubResult prepare_check(MxbHeightPublication *p,const uint32_t *tiles,size_t count,const MxbPendingView *v){
  MxbPubResult r=ready(p);if(r!=MXB_PUB_OK)return r;
@@ -263,7 +277,7 @@ static void reserve_batch(MxbHeightPublication *p,const uint32_t *tiles,size_t c
 }
 MxbPubResult mxb_pub_prepare_native_clear_batch(MxbHeightPublication *p,const uint32_t *tiles,size_t count,const MxbPendingView *v,uint64_t *token){
  if(!token)return MXB_PUB_INVALID;MxbPubResult r=prepare_check(p,tiles,count,v);if(r!=MXB_PUB_OK)return r;
- if(!pending_exact(p,v))return fault(p);reserve_batch(p,tiles,count,token);return MXB_PUB_OK;
+ if(!pending_slice_exact(p,v))return fault(p);reserve_batch(p,tiles,count,token);return MXB_PUB_OK;
 }
 MxbPubResult mxb_pub_prepare_native_clear(MxbHeightPublication *p,uint32_t tile,const MxbPendingView *v,uint64_t *token){
  return mxb_pub_prepare_native_clear_batch(p,&tile,1,v,token);
@@ -274,7 +288,7 @@ MxbPubResult mxb_pub_issue_prepare_batch(MxbHeightPublication *p,MxbPendingView 
  r=mxb_pub_issue(p,v,exclusive,receipt);
  if(r!=MXB_PUB_PROGRESS&&r!=MXB_PUB_TARGET_ISSUED&&r!=MXB_PUB_BLOCKED&&r!=MXB_PUB_NO_CHANGE)return r;
  /* issue validated every pending cell, then only the owning module wrote its
-    known changes. Rechecking the same memory here adds no new observation. */
+    known changes (issue checks one slice per call, see VERIFY_SLICES). */
  reserve_batch(p,tiles,count,token);return r;
 }
 MxbPubResult mxb_pub_finish_native_clear(MxbHeightPublication *p,uint64_t token,const MxbPendingView *v){

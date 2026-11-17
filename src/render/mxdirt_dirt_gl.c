@@ -31,9 +31,9 @@ enum { UNITS=6 };
 /* Soft layer window: SOFT_SIDE^2 texels in SOFT_SLOTS^2 tile slots, slot = tile index mod SOFT_SLOTS. */
 enum { SOFT_TILE=32,SOFT_SLOTS=64,SOFT_SIDE=SOFT_TILE*SOFT_SLOTS };
 enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,
- U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_SOFT_OCC,U_SOFT_TILE,U_SHIFT,U_RELIEF,U_COUNT };
+ U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_SOFT_OCC,U_SOFT_TILE,U_SHIFT,U_RELIEF,U_RAMP,U_SOFT_LIFT,U_COUNT };
 static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on",
- "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode","soft_occ","soft_tile","shift","relief"};
+ "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode","soft_occ","soft_tile","shift","relief","ramp","soft_lift"};
 /* Bindings this pass changes and must hand back unchanged. */
 typedef struct {GLint program,active,unpack_buffer,unpack[6],texture[UNITS],sampler[UNITS];} SavedBindings;
 static const GLenum unpack_names[6]={GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS,GL_UNPACK_SWAP_BYTES,GL_UNPACK_LSB_FIRST};
@@ -367,7 +367,8 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   p->ui(u[U_SOFT_MODE],soft_on?(soft->solid?1:0):0);
   p->u1f(u[U_SOFT_CELL],soft_on?soft->cell:.025f);p->u1f(u[U_SOFT_DEPTH],soft_on?soft->thickness:.03f);p->u1f(u[U_SOFT_UNIT],soft_on?soft->unit:.001f);
   p->ui(u[U_SOFT_OCC],5);p->u1f(u[U_SOFT_TILE],soft_on?soft->cell*SOFT_TILE:.8f);
-  p->u2f(u[U_SHIFT],(float)w->shift_x,(float)w->shift_z);p->u1f(u[U_RELIEF],look->relief);}
+  p->u2f(u[U_SHIFT],(float)w->shift_x,(float)w->shift_z);p->u1f(u[U_RELIEF],look->relief);p->u1f(u[U_SOFT_LIFT],look->lift<0.f?0.f:look->lift>1.f?1.f:look->lift);
+  {float r[4];for(int k=0;k<4;k++)r[k]=w->ramp[k]>0.f?w->ramp[k]:8.f;p->u4f(u[U_RAMP],r[0],r[1],r[2],r[3]);}}
  p->use_program(p->program[0]);
  p->disable_indexed(GL_BLEND,0);p->color(0,1,1,1,0);
  glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDepthMask(GL_FALSE);for(unsigned k=1;k<8;k++)glDisable(caps[k]);glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
