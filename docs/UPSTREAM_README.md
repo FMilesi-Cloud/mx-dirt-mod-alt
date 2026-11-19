@@ -1,0 +1,495 @@
+# MX Dirt Mod
+
+Realistic track wear for **MX Bikes**. Ruts, braking bumps, acceleration chop, rolling bumps, berms and a soft layer of loose dirt all form where and how riders actually wear a track: while you ride, and before you start.
+
+The ruts and bumps are written into MX Bikes' own terrain, so **the bike really rides them**. On top of that, a soft layer of loose dirt takes every tyre mark, the way snow does.
+
+---
+
+## Contents
+
+1. [Quick start](#quick-start)
+2. [Requirements](#requirements)
+3. [Install](#install)
+4. [Your first ride](#your-first-ride)
+5. [What every part of the mod does](#what-every-part-of-the-mod-does)
+6. [The launcher](#the-launcher)
+7. [Settings reference](#settings-reference)
+8. [Uninstall](#uninstall)
+9. [Updating](#updating)
+10. [Troubleshooting](#troubleshooting)
+11. [Files the mod creates](#files-the-mod-creates)
+12. [How it works (technical)](#how-it-works-technical)
+13. [Build from source](#build-from-source)
+14. [License](#license)
+
+---
+
+## Quick start
+
+1. Close MX Bikes.
+2. Download `MX-Dirt-Mod-<version>.zip` from **Releases** (right side of the GitHub page) and extract it anywhere, for example to your Desktop.
+3. Double-click **`Install.cmd`**.
+4. Start MX Bikes, open a track in **Testing** and ride a few laps.
+5. Reset the track's wear in the **MX Dirt Mod** launcher (desktop shortcut) and load the track again. It now starts worn, as if a moto had already been ridden on it.
+
+To remove the mod, double-click **`Uninstall.cmd`** in the same folder.
+
+Prefer copying files yourself? See [Manual install](#manual-install-no-installer).
+
+---
+
+## Requirements
+
+- Windows 10 or 11, 64-bit.
+- **MX Bikes from Steam, build 23566986.** The exact `mxbikes.exe` hash is in `SUPPORTED_EXE.txt`.
+  - The mod hooks fixed places in that exact executable.
+  - With any other game version it switches itself off and the game runs normally, until a release for that version is out. Nothing breaks.
+- A graphics card with OpenGL 4 (any GPU from the last ten years).
+- **Testing sessions, offline.** By default the mod does nothing in online races. An experimental, **untested** option turns it on there: see [Online wear](#8-online-wear-experimental-untested).
+
+You do **not** need to install anything else: no downloads, no Python, no admin rights.
+
+---
+
+## Install
+
+1. **Close MX Bikes.** The installer refuses to run while the game is open.
+2. **Extract the zip.** Right-click the zip, choose *Extract All…*, and pick a folder. Don't run it from inside the zip.
+3. **Double-click `Install.cmd`.**
+   - It finds your MX Bikes folder through Steam. If it can't, it asks you to pick the folder that contains `mxbikes.exe`.
+   - A message box tells you where it installed and where it put its backup.
+
+That's it. The installer:
+
+- copies two plugins into `MX Bikes\plugins`:
+  - `mx_dirt.dlo`, the dirt simulation
+  - `mx_dirt_render.dlo`, the dirt look
+- copies their settings files, `mx_dirt.ini` and `mx_dirt_render.ini`. On an update it **keeps your existing settings**.
+- installs the launcher to `MX Bikes\plugins\mx_dirt_launcher` and puts an **"MX Dirt Mod" shortcut on your desktop**.
+- **never deletes anything.** Every file it replaces is moved to `Documents\PiBoSo\MX Bikes\mx_dirt_mod_backups\install-<date>`.
+
+If Windows shows a blue "Windows protected your PC" box, click *More info* → *Run anyway*. The installer is a plain PowerShell script (`install\Install.ps1`) that you can read first.
+
+### Manual install (no installer)
+
+Use this if you'd rather copy the files yourself, or `Install.cmd` doesn't work for you. It takes about two minutes.
+
+**1. Close MX Bikes.**
+
+**2. Extract the zip.** Right-click it, choose *Extract All…*, and open the extracted folder. You'll see:
+
+```
+MX-Dirt-Mod-<version>\
+  plugins\      <- the mod itself (this is all the game needs)
+  launcher\     <- optional settings app
+  install\, Install.cmd, Uninstall.cmd, README.txt, LICENSE, SUPPORTED_EXE.txt
+```
+
+**3. Open your MX Bikes folder.** In Steam, right-click **MX Bikes** → *Manage* → *Browse local files*. That's the folder with `mxbikes.exe`, usually `C:\Program Files (x86)\Steam\steamapps\common\MX Bikes`. Open its `plugins` folder. If there's no `plugins` folder, create one.
+
+**4. Move old dirt plugins out (if you have any).** If your `plugins` folder contains any of these, move them somewhere else, for example a new folder on your Desktop. They patch the same game code and will clash:
+- `living_dirt.dlo`
+- any `mxb_reflex_*.dlo` (pre-release builds of this mod)
+
+**5. Copy the mod in.** From the zip's `plugins` folder, copy these four files into `MX Bikes\plugins`:
+
+| File | What it is |
+|---|---|
+| `mx_dirt.dlo` | the dirt simulation (ruts, bumps, pre-wear) |
+| `mx_dirt_render.dlo` | the dirt look (shading, soft layer with tyre marks) |
+| `mx_dirt.ini` | simulation settings |
+| `mx_dirt_render.ini` | look settings |
+
+Updating an existing install? Copy only the two `.dlo` files to keep your settings. Back up the old ones first if you might want them back.
+
+**6. Optional: the launcher.** To change settings with buttons instead of editing the `.ini` files:
+- Create `MX Bikes\plugins\mx_dirt_launcher` and copy everything from the zip's `launcher` folder into it.
+- Right-click each copied file → *Properties*. If there's an **Unblock** box at the bottom, tick it and press OK. Windows blocks scripts that came from the internet.
+- Double-click **`MX Dirt Mod.cmd`** to open it. For a desktop shortcut, right-click `MX Dirt Mod.cmd` → *Send to* → *Desktop (create shortcut)*.
+
+**7. Check it works.** Start MX Bikes and open a track in **Testing**. A file `MX Bikes\plugins\mx_dirt.jsonl` appears, the mod's log. Ride and you'll see ruts and tyre marks form. If nothing happens, see [Troubleshooting](#troubleshooting).
+
+Without the launcher, every setting is in the two `.ini` files: open them in Notepad. They're explained in [Settings reference](#settings-reference). To reset a track's wear by hand, see [Uninstall](#uninstall) (*Tracks' saved wear*).
+
+---
+
+## Your first ride
+
+Pre-wear (a worn track when it loads) rides **your own recorded laps**, so it needs at least one lap on that track first:
+
+1. Start MX Bikes and open a track in **Testing**.
+2. Ride a few clean laps. Every valid lap is recorded automatically to `plugins\mx_dirt_laps\<track>`. Ruts, bumps and soft-layer marks form under your wheels as you ride.
+3. Leave the track and close MX Bikes.
+4. Open the **MX Dirt Mod** launcher, pick the track under *Saved track wear* and press **Reset this track's wear**.
+   - This makes the track start fresh next time.
+   - Its old saved wear is moved to the backup folder.
+5. Start MX Bikes and load the track again. Virtual riders ride your recorded laps before you start, so loading takes about 10 seconds longer. The track starts looking like it's after moto 1.
+
+From then on the track keeps its wear between sessions. MX Bikes saves it when you leave, and the mod saves its soft-layer marks with it.
+
+---
+
+## What every part of the mod does
+
+### 1. Live dirt simulation (`mx_dirt.dlo`)
+Every tyre contact, every physics frame, works the soil under it:
+- **Ruts:**
+  - Tyres sink by their load into soil that gets firmer the more it is ridden.
+  - Fresh dirt cuts deep. A ridden-in line packs hard and cuts little.
+  - Tyres drop into existing grooves, so a few deep parallel ruts form instead of one wide trench.
+- **Loose soil and berms:**
+  - Cut soil is pushed out as loose dirt.
+  - Loose dirt slides down to its natural angle (about 34°). Damp soil holds steeper walls.
+  - Corners build berms where riders push the soil out.
+- **Braking bumps and acceleration chop:**
+  - The wheel's own bounce (fork, shock, tyre) decides where bumps form, the same way it does on a real track.
+  - Braking rows get tallest. Hard acceleration builds chop.
+  - Any hop makes small rollers.
+  - The first ~30 m after a corner stays calmer, like the Maryland Pro track: riders drive out on a settled bike.
+- **Jump faces route out:** ruts run up the face and through the lip at their run-up depth, as on the Pro track. No roost, pushed-up dirt or bump rows land on the face, so the lip never grows into a kicker.
+- **Landings** pack the ground rather than digging craters.
+- **Roost:** spinning tyres throw soil back as scattered clods.
+- **Moisture:** the track starts watered and dries out over a ride. Damp soil is darker, packs better and holds sharper ruts.
+- **Surfaces** use MX Bikes' own material under the tyre:
+  - sand ruts deep and wide
+  - hard-pack resists and grows chop
+  - soft soil gives more
+  - gravel barely moves
+
+The wear goes into MX Bikes' terrain deformation, so the game's physics and your bike ride it.
+
+MX Bikes saves only the track's heights. The mod saves the rest of the soil with it when you leave a ridden track (packing, loose soil, damp spots, roost clods and tyre prints), so the track comes back ridden-in, not as fresh soil in the old shape. It is only loaded while the track's saved wear still matches; a reset track starts fresh.
+
+### 2. Pre-wear
+- When a **fresh** track loads, a gate of virtual riders (50 by default) rides your four fastest recorded laps.
+- Each rider has its own line, spread and aggression, its own bike setup, and its own braking and gas points.
+- "After moto 1" was tuned against a real pro-worn track (bump heights, rut depth, worn band width).
+- A track that already has saved wear is left as it is, so wear doesn't pile up on every load. Use the launcher's reset to start a track over.
+
+### 3. Lap recording
+- Every valid lap is saved as a `.dghost` file in `plugins\mx_dirt_laps\<track>\`.
+- These files hold only your tyre contacts (position, speed, slip, load), not a replay.
+- Pre-wear uses the fastest four. You can delete old ones any time.
+
+### 4. Soft dirt layer
+- A few centimetres of loose top soil (85 mm by default) lie on the dirt, like fresh snow but dirt.
+- Tyres press trenches into it:
+  - with knob prints in the trench floor
+  - with lips of dirt pushed up beside the tread
+  - with crumbs roosted back when you spin
+  - with a mound shoved ahead when you lock the brakes
+  - pushed to one side when you slide
+- The marks have character:
+  - A spinning rear tyre scoops an uneven row of scallops into the floor.
+  - A locked or dragging tyre smears a wider, shallower groove with drag lines.
+  - A front tyre leaves a low rib down the middle of its groove.
+- The trench line weaves a little and its walls break here and there, like a tyre in real dirt, instead of a ruled line.
+- Loose soil is lighter and dustier than packed ground, so the dark ruts stay easy to read. Freshly moved soil is lightest and crisp; it settles and smooths out over a few laps (about 4–5 minutes), so your latest passes stand out.
+- It follows the dirt simulation:
+  - It lies deeper on loose soil and on a softer track.
+  - It is thinner, and ironed flat, on packed lines.
+  - Damp dirt holds crisp prints and tall lips; dry dirt crumbles.
+  - Sand lies deep; hard-pack and gravel carry only a thin skin.
+  - Loose soil the simulation throws around (berms beside the line, soil shoved into bump rows, roost behind a spinning tyre) falls into the trenches and buries old prints. Untouched ground stays clean.
+  - The in-game Deformation slider scales it like the ruts (slider at 0: no layer).
+- Up close it's drawn with real depth (parallax) and its own shadows. The ground's own texture moves with the relief, so it reads as solid dirt, and the tyres sit in the loose soil instead of on top of it.
+- It's **a look only**: the bike rides the dirt simulation's ruts under it. The layer is drawn lying on top of that ridden ground, so a pressed trench floor is where the tyre actually rolls.
+- Its marks are saved with the track in `plugins\mx_dirt_soft\<track>\`.
+
+### 5. Dirt look (`mx_dirt_render.dlo`)
+- Shades the ground MX Bikes just drew, using the simulation's state, so every track keeps its own dirt colour.
+- Sharper rut walls and lighting, with shadows cast by the ruts.
+- Damp rut bottoms, dry crests, packed shiny lines and loose crumbly dirt.
+- Roost clods, and the soft dirt layer with its tyre marks.
+- It fades out with distance (100 m by default; the tyre trenches of the soft layer show to about 30 m) and leaves grass alone.
+
+### 6. Engine fixes
+While a track is loaded, the mod applies three small, guarded fixes to MX Bikes' terrain code in memory, and removes them when you leave the track:
+
+| Fix | Why the mod needs it |
+|---|---|
+| **Signed deformation merge** | The game's deformation can normally only dig. This lets berms and pushed-up soil exist. |
+| **Non-negative material lookup** | Raised ground still finds its surface material. |
+| **Raised dirt surface** (render plugin) | Raised ground shows the dirt surface, not the bottom texture layer. |
+
+You can turn off the raised dirt surface fix with `raised_dirt_surface=0` in `mx_dirt_render.ini`.
+
+### 7. Launcher
+A small settings window. See [The launcher](#the-launcher).
+
+### 8. Online wear (experimental, untested)
+**This has never been run on a real server.** It is tested offline only, against simulated riders and recorded laps. Try it, and please report what happens.
+
+Off by default. Turn it on with **Online wear** in the launcher, or `online_wear=1` under `[online]` in `mx_dirt.ini`.
+
+- With it on, the mod also runs in online races, and **the other riders wear the track too**.
+- MX Bikes only tells a plugin where each bike is. The mod makes up the other riders' tyre passes from that: speed, heading, braking, acceleration and turning.
+  - A rider in the air or crashed leaves no marks.
+  - A made-up pass wears about as much as one of yours.
+- Before anyone else wears anything, the mod checks the reported positions against your own bike, which it knows exactly. Ride about 60 m first. If the check never passes, the other riders are ignored and only your own wear runs.
+- **Every player needs the mod, the same version and the same settings.** Each PC builds its own track from what it sees.
+  - Tracks are similar between players, never identical.
+  - A player without the mod sees no ruts at all, and sees your bike riding in ruts that are not there for them.
+  - A player who joins late starts with a fresh track.
+- Online there is no pre-wear, no lap recording, and nothing is saved or loaded: an online track always starts fresh and is gone when you leave.
+- Other riders are assumed to ride on dirt. Where they ride over concrete or wood, they can leave marks there too.
+- Check with the server's host before using it in a real race.
+
+After a session, `plugins\mx_dirt.jsonl` has an `online_riders` line: whether the position check passed, how many riders were seen and how many tyre passes they made. That line is the most useful thing to send with a report.
+
+---
+
+## The launcher
+
+Open **MX Dirt Mod** from your desktop. If the shortcut is missing, run `MX Bikes\plugins\mx_dirt_launcher\MX Dirt Mod.cmd`.
+
+- **Dirt mod enabled:** turns the whole mod on or off. Off means MX Bikes runs exactly as without it.
+- **Starting wear:** how worn a fresh track starts.
+  - Off
+  - Practice (25 riders)
+  - After moto 1 (50, the default)
+  - End of day (80)
+  - Destroyed (130)
+- **Wear spread:** how far the virtual riders spread from your lines. Lower gives fewer, deeper lines.
+- **Wear from your laps:** how fast your own riding wears the track.
+  - Realistic (default): slow one-rider wear. Your line packs in and bumps stay small.
+  - Medium: about 15 of your laps wear a track like the Practice level.
+  - Arcade (hero dirt): not realistic, just fun. Wear builds twice as fast; deep, grippy ruts and tall berms you can rail; less chop; the dirt stays damp all session. Picking it also fills in its own rut depth (80), moisture (45), rolling bumps (30), soft layer (100 mm), look strength (160) and starting wear (End of day), and writes rut capture 150, wall cohesion 150, packed hardness 70, braking bumps 60, drying 0 and roost clods 200 to `mx_dirt.ini`. Picking Realistic or Medium again puts all of them back.
+- **Dirt:** rut depth, track firmness, moisture, rolling bumps, lines riding with you, and the soft dirt layer thickness.
+- **Look:** dirt look strength and distance, rut and bump contrast, soft dirt height, dirt shading on/off.
+- **Record my laps:** needed for pre-wear.
+- **Keep saved wear:** pre-wear only fresh tracks. Turn it off to wear the track again on every load, so wear stacks up.
+- **Online wear:** experimental and untested. See [Online wear](#8-online-wear-experimental-untested).
+- **Saved track wear → Reset this track's wear:** the chosen track starts fresh next time. Its saved wear is moved to the backup folder, not deleted.
+- **Recommended:** fills in the default settings; press Save to keep them.
+- **Save / Save & start MX Bikes**
+- **Apply live while MX Bikes runs:** on by default. See below.
+- **Stay on top of the game:** for a game running in a window or borderless. In exclusive fullscreen, use Alt+Tab.
+- **In the game, press F10** to bring the launcher up in front (it starts if it isn't open). In exclusive fullscreen the game minimises while the launcher is in front; click MX Bikes in the taskbar or press Alt+Tab to go back. Change the key with `launcher_key` in `mx_dirt_render.ini`.
+
+### Tuning while you ride
+
+Leave the launcher open while MX Bikes runs. Every change you make is saved and shows in the game about half a second later, with no restart:
+
+- **Right away:** rut depth, firmness, moisture (the track is watered or dried to the new value at once), rolling bumps, wear from your laps, lines riding with you, look strength and distance, dirt shading on/off. The dirt settings change how the track wears from then on; ruts and bumps that are already there stay.
+- **The next time a track loads:** starting wear, wear spread, soft layer thickness, keep saved wear, online wear.
+- **After a restart:** dirt mod enabled. Dirt shading can only be switched back on live if it was on when the game started.
+- In an online race the running track keeps its settings, because every player must use the same ones.
+
+With MX Bikes closed, changes apply the next time it starts. Editing the `.ini` files by hand works the same way: the game re-reads a file when it is saved.
+
+---
+
+## Settings reference
+
+All settings live in two text files in `MX Bikes\plugins`, with comments. The launcher edits them for you.
+
+### `mx_dirt.ini` (simulation)
+
+| Key | Default | Range | What it does |
+|---|---|---|---|
+| `[active] enabled` | 1 | 0/1 | 0 turns the simulation plugin off. |
+| `dirt_sim_depth_percent` | 60 | 10–300 | How deep tyres cut. Also follows the in-game Deformation slider. |
+| `dirt_sim_firmness_percent` | 55 | 0–100 | 0 = freshly ripped soft dirt, 100 = hard-pack. |
+| `dirt_sim_moisture_percent` | 35 | 0–100 | 0 dry/dusty, 35 ideal, 100 muddy. |
+| `packed_hardness_percent` | 100 | 25–200 | How hard a ridden-in line gets. |
+| `breakdown_percent` | 100 | 0–300 | How fast sliding tyres break packed crust loose. |
+| `drying_percent` | 100 | 0–400 | How fast the track dries during a ride. |
+| `sweep_percent` | 100 | 0–300 | How strongly tyres push loose soil off the line. |
+| `rut_capture_percent` | 100 | 0–300 | Tyres dropping into existing grooves. |
+| `wall_cohesion_percent` | 100 | 0–300 | Damp rut walls holding steep. |
+| `roost_clods_percent` | 100 | 0–300 | Roost landing as clods. |
+| `sharp_ruts` | 0 | 0/1 | Sharper ruts; diagonal ruts can show teeth. |
+| `braking_bumps_percent` | 100 | 0–200 | Braking bumps and bump stress. |
+| `rolling_bumps_percent` | 60 | 0–100 | Bumps without braking or gas. |
+| `live_wear_percent` | 0 | 0–200 | How much each of your laps wears the track. 0 = Realistic, 100 = Medium (~15 laps = Practice). |
+| `live_gate_lines` | 1 | 1–8 | Your live wear shared over N nearby lines. |
+| `extra_riders` | 0 | 0–15 | Test mode: extra riders copy each of your contacts. |
+| `record_ghosts` | 1 | 0/1 | Record your laps. |
+| `ghost_riders` | 0 | 0–12 | Recorded laps replayed live as invisible riders. |
+| `prewear_riders` | 50 | 0–400 | Virtual riders on a fresh track (0 = off). |
+| `prewear_spread_cm` | 140 | 0–500 | How far they spread across the track. |
+| `prewear_clip_cm` | 400 | 0–600 | Farthest any of them strays. |
+| `prewear_fresh_only` | 1 | 0/1 | Pre-wear only tracks without saved wear. |
+| `soft_layer_mm` | 85 | 0–100 | Soft dirt layer thickness (0 = off). |
+| `follow_game_deformation` | 1 | 0/1 | Rut depth follows the in-game Deformation slider. |
+| `game_deformation_reference_percent` | 25 | 1–200 | Slider value at which rut depth applies unchanged. |
+| `sand_tracks` | (empty) | text | Track-name fragments to treat as sand, comma separated. |
+| `[terrain] batch_tiles` | 4 | 1–4 | Pieces of worn track (64 × 64 cells) handed to the game at once. |
+| `[terrain] send_interval_ms` | 0 | 0–250 | Least time between two hand-overs (0 = whenever something changed). |
+| `[online] online_wear` | 0 | 0/1 | Experimental, untested: run in online races and let the other riders wear the track. |
+| `[debug] dump_terrain` | 0 | 0/1 | Save each track's terrain for offline analysis. |
+| `[debug] online_echo` | 0 | 0/1 | Test of the online riders in Testing: a copy of your bike rides 3 m beside you. |
+
+An out-of-range value switches the simulation off for that game start, and the reason is written to `plugins\mx_dirt.jsonl`.
+
+### `mx_dirt_render.ini` (look)
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | 1 | 0 turns the look plugin off. |
+| `dirt_material` | 1 | The dirt shading pass. |
+| `dirt_strength` | 135 | Strength of the shading, 0–200 %. |
+| `dirt_loose` | 55 | Fine loose grain on worked ground, 0–100 %. |
+| `dirt_relief` | 100 | Depth shading, 0–200 % (0 = off). Ground dug below the original surface gets darker with depth (rut floors, bump troughs, berm grooves); raised ground gets lighter (lips, bump crests, berm tops). It doesn't use the sun, so the shapes read in flat light and from far away. Untouched ground is never changed. |
+| `launcher_key` | F10 | Key (F1–F12) that brings up the launcher while you are in the game. Empty = no key. |
+| `dirt_fade_start` / `dirt_fade_end` | 75 / 100 | Distance (m) where the look fades out; the end is 100 at most (the dirt is drawn about 95 m ahead, 65 m to the sides). A file that still has the old 45 / 60 is read as 75 / 100 (for 60 m write 44 / 60; the launcher does). |
+| `soft_layer` | 1 | Draw the soft dirt layer. |
+| `soft_solid` | 1 | The ground texture follows the soft layer's relief (0 = relief shading only). |
+| `soft_lift_percent` | 100 | How high the untouched soft layer sits above the game's ground, 0–100 %. Lower it if ruts seem to slide when seen up close (fender camera, replays). At 0, ground nobody rode is drawn exactly as the game draws it. |
+| `tyre_sink` | 1 | Tyres sink into raised loose soil (0 = they are drawn on top of it). |
+| `raised_dirt_surface` | 1 | Raised-dirt surface fix. |
+| `content_log` | `plugins\mx_dirt_render.log` | Diagnostic log; empty = none. |
+
+---
+
+## Uninstall
+
+1. Close MX Bikes.
+2. Double-click **`Uninstall.cmd`** from the release folder you installed from. If you deleted that folder, download the release again and use its `Uninstall.cmd`.
+
+The uninstaller **moves** these to `Documents\PiBoSo\MX Bikes\mx_dirt_mod_backups\uninstall-<date>`, so nothing is deleted:
+- both plugins and their settings
+- logs
+- the launcher and the desktop shortcut
+- the soft-layer marks
+
+After that, MX Bikes is back to normal.
+
+What stays:
+
+- **Your recorded laps** in `MX Bikes\plugins\mx_dirt_laps`. Keep them if you might reinstall, or delete the folder.
+- **Tracks' saved wear.** MX Bikes itself saves each track's terrain when you leave it, and those ruts stay in the game's own save.
+  - To make a track fresh again, move or delete its `testing.dfm` from `Documents\PiBoSo\MX Bikes\profiles\<profile>\tracks\<track>\`.
+  - The launcher's *Reset this track's wear* does exactly that, so you can use it before uninstalling.
+- **The backup folder** `Documents\PiBoSo\MX Bikes\mx_dirt_mod_backups`. Delete it when you no longer need it.
+
+**Uninstalling by hand:** with the game closed, remove these from `MX Bikes\plugins`:
+- `mx_dirt.dlo` and `mx_dirt_render.dlo`
+- `mx_dirt.ini` and `mx_dirt_render.ini`
+- optional: the `mx_dirt_launcher` and `mx_dirt_soft` folders, `mx_dirt.jsonl` and `mx_dirt_render.log`, and the desktop shortcut
+
+**Turning it off without uninstalling:** untick *Dirt mod enabled* in the launcher, or set `enabled=0` in both ini files.
+
+---
+
+## Updating
+
+Close MX Bikes, extract the new release and run its `Install.cmd`. Your settings, laps and saved wear are kept. The old plugins go to the backup folder.
+
+By hand: copy the new release's `mx_dirt.dlo` and `mx_dirt_render.dlo` over the old ones in `MX Bikes\plugins`, and the `launcher` files over `plugins\mx_dirt_launcher` if you use it.
+
+If a new release adds new settings, they use their defaults until you change them in the launcher. Press **Recommended** and then **Save** to take all the new defaults.
+
+---
+
+## Troubleshooting
+
+**Nothing happens: no ruts, no look.**
+- Check you are in a **Testing** session, offline.
+- Open `MX Bikes\plugins\mx_dirt.jsonl` in Notepad. The first line shows `exe_sha256`. If it doesn't match `SUPPORTED_EXE.txt`, your MX Bikes version isn't supported yet, and the mod stays off on purpose.
+- If the file is missing, the plugin didn't load. Check that `mx_dirt.dlo` is in `MX Bikes\plugins`, and that `enabled=1`.
+
+**The track doesn't start worn.**
+- Pre-wear needs recorded laps on that track: ride a few laps first.
+- It only runs on a fresh track. Use the launcher's *Reset this track's wear*.
+- Look for `"kind":"prewear"` in `mx_dirt.jsonl`.
+
+**No dirt look, but ruts work.**
+- Check that `mx_dirt_render.dlo` is installed and that `enabled=1` in `mx_dirt_render.ini`.
+- Open `plugins\mx_dirt_render.log`. A `dirt_disabled` line says why the look is off.
+
+**Loading a fresh track takes longer.** That's pre-wear riding 50 virtual riders: around 10 seconds, and only on a fresh track. Lower *Starting wear* to speed it up.
+
+**Frame drops or stutter while riding.** Version 1.7.1 removed the main cause (see the release notes). If it still stutters, close MX Bikes after riding and attach `plugins\mx_dirt.jsonl` and `plugins\mx_dirt_render.log`: the `terrain_timing` line shows how long the game spent on the mod's track updates.
+
+**The uninstaller can't find MX Bikes.** Since 1.7.1 it looks in every Steam library and then asks for the folder. In Steam: right-click MX Bikes > Manage > Browse local files shows it.
+
+**The installer says "Close MX Bikes first".** The game, or a stuck `mxbikes.exe`, is still running. End it in Task Manager.
+
+**I want my old track back.** Every reset or replaced file is in `Documents\PiBoSo\MX Bikes\mx_dirt_mod_backups`. To restore a track, copy its `.dfm` from `track-wear` back to that track's folder and rename it `testing.dfm`.
+
+When you report a problem, attach `plugins\mx_dirt.jsonl` and `plugins\mx_dirt_render.log`.
+
+---
+
+## Files the mod creates
+
+| Where | What |
+|---|---|
+| `MX Bikes\plugins\mx_dirt.dlo`, `mx_dirt.ini` | Simulation plugin and its settings |
+| `MX Bikes\plugins\mx_dirt_render.dlo`, `mx_dirt_render.ini` | Look plugin and its settings |
+| `MX Bikes\plugins\mx_dirt_launcher\` | The launcher |
+| `MX Bikes\plugins\mx_dirt_laps\<track>\*.dghost` | Your recorded laps |
+| `MX Bikes\plugins\mx_dirt_soft\<track>\layer.msl` | Soft dirt layer marks for the track's saved wear |
+| `MX Bikes\plugins\mx_dirt_soft\<track>\soil.mss` | The track's soil state: packing, loose soil, moisture, clods, prints (~10 MB) |
+| `MX Bikes\plugins\mx_dirt.jsonl`, `mx_dirt_render.log` | Logs (overwritten every game start) |
+| `Desktop\MX Dirt Mod.lnk` | Launcher shortcut |
+| `Documents\PiBoSo\MX Bikes\mx_dirt_mod_backups\` | Everything the installer, uninstaller or a reset replaced |
+
+The mod never changes `mxbikes.exe` or any game file on disk. Its engine fixes live only in memory while a track is loaded.
+
+---
+
+## How it works (technical)
+
+MX Bikes loads every `.dlo` in its `plugins` folder through its plugin API. This mod is two plugins:
+
+**Core: `mx_dirt.dlo`**
+- **Startup:**
+  - Hashes `mxbikes.exe` and refuses to run on anything but the supported build.
+  - Reads `mx_dirt.ini`.
+- **Track load:** installs the two terrain fixes (`mxdirt_patches.c`).
+- **Session setup:**
+  - Hooks the per-physics-step wheel-force call and the game's outer scheduler step.
+  - Verifies the game's two terrain copies agree.
+  - Builds the dirt simulation over the track's height grid.
+  - Runs pre-wear.
+- **Every frame:**
+  1. Wheel contacts (position, load, slip, material) are read from the bike (`mxdirt_wheel_sample.c`, `mxdirt_contact.c`).
+  2. The dirt simulation steps (`mxb_soil_sim.h`), together with work history (`mxdirt_soil_evolution.h`), bump stress (`mxb_soil_bumps.h`) and the soft layer (`mxdirt_soft_layer.h`).
+  3. Changed heights are converted to MX Bikes' deformation format (`mxdirt_height_field.c`).
+  4. They are published into the game's terrain, sparsely and paced (`mxdirt_transport.c`, `mxdirt_height_publication.c`).
+- **Track close:**
+  - Saves the soft layer.
+  - Unhooks.
+  - Removes the terrain fixes.
+- **Export:** `MxDirtBorrowFrame` shares the simulation's read-only state with the render plugin (`src/shared/mxdirt_frame.h`).
+
+**Render: `mx_dirt_render.dlo`**
+- Hooks the terrain draw.
+- Right after MX Bikes draws the ground, it draws one extra pass over a ~140 m window around the camera (about 95 m ahead, 65 m to the sides on a 550 m track), using the game's own camera and sun. The window scrolls with the camera: only the rows and columns that enter it, and what changed, are read and uploaded:
+  - it reads the native colour that was just drawn
+  - it reads the current and original heights, and the simulation state
+  - it reads the soft layer: a 51 m window, uploaded tile by tile as it changes
+  - it re-lights the ground (`mxdirt_dirt_shader.h`)
+- It never writes depth, so the bike and everything else draw over it normally.
+
+**Safety**
+- Every hook and patch checks the exact bytes it replaces, and puts them back.
+- Any mismatch, fault or unexpected thread switches the mod off for that track, and the game carries on.
+
+---
+
+## Build from source
+
+You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the C compiler. In PowerShell:
+
+```
+.\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
+.\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
+.\package.ps1 -Version 1.7.1   # both + the release zip in build\
+```
+
+Source layout:
+- `src\core`: the dirt simulation (`mxb_soil_*.h`), the soft dirt layer (`mxdirt_soft_layer.h`), pre-wear, lap recording, engine fixes and publishing heights into the game.
+- `src\render`: the dirt look pass and its shader.
+- `src\shared`: the interface between the two plugins.
+- `install`, `launcher`: the installer, uninstaller and launcher (PowerShell).
+
+---
+
+## License
+
+GPL-3.0, see `LICENSE`. MX Bikes is © PiBoSo. This project is not affiliated with or endorsed by PiBoSo.

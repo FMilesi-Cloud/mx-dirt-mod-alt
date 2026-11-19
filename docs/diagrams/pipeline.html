@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MX Dirt Mod Alt — Pipeline</title>
+<style>
+  :root { --bg:#fbfaf8; --fg:#1f1d1a; --muted:#6b655c; --card:#ffffff; --line:#e4ded4; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16140f; --fg:#ece7de; --muted:#a39b8e; --card:#1f1c16; --line:#353026; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  p { color:var(--muted); margin:4px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-top:20px; overflow-x:auto; }
+  h2 { font-size:1.05rem; margin:0 0 8px; }
+  small { color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>MX Dirt Mod Alt — Pipeline</h1>
+  <p><b>ES:</b> Cómo viaja un contacto de rueda hasta convertirse en un surco que la moto pisa y que el render dibuja. En verde, lo que agrega o cambia esta versión.</p>
+  <p><b>EN:</b> How a wheel contact becomes a rut the bike rides and the renderer draws. In green, what this version adds or changes.</p>
+  <p><small>Última actualización / Last updated: 2026-11-19</small></p>
+
+  <div class="card">
+    <h2>Flujo por frame / Per-frame flow</h2>
+    <pre class="mermaid">
+flowchart LR
+  subgraph game["MX Bikes"]
+    W["Fuerza de rueda / Wheel force<br/>(cada paso de física / every physics step)"]
+    OUT["Planificador por frame / Frame scheduler"]
+    T["Terreno del juego / Game terrain<br/>(grilla DFM / DFM grid)"]
+    G["Dibujo del terreno / Terrain draw"]
+    API["API de plugins / Plugin API<br/>Draw, RunTelemetry, EventInit"]
+  end
+  subgraph core["mx_dirt.dlo"]
+    S["Muestra de rueda / Wheel sample<br/>carga, slip, material / load, slip, material"]
+    GEO["Geometría real / Real geometry<br/>radio, ancho, inclinación / radius, width, lean"]
+    TEL["Telemetría verificada / Verified telemetry<br/>frenos, caída / brakes, crash"]
+    SIM["Simulación del suelo / Soil simulation<br/>Bekker, masa conservada, bermas, baches"]
+    LEAN["Erosión por inclinación / Lean erosion<br/>tope de pared / wall cap"]
+    HF["Alturas a DFM / Heights to DFM"]
+    PUB["Publicación por tiles / Tile publication<br/>verificación 1/64 / 1/64 check"]
+    MENU["Menú F8 / F8 menu<br/>presets, perfiles, reseteo, alisado, riego"]
+  end
+  subgraph render["mx_dirt_render.dlo"]
+    R["Pase de tierra / Dirt pass<br/>relieve, capa blanda 102 m, terrones"]
+  end
+  W --> S --> GEO --> SIM
+  API --> TEL --> SIM
+  SIM --> LEAN --> HF --> PUB --> T --> G --> R
+  OUT --> PUB
+  API --> MENU -->|pedidos entre frames / requests between frames| SIM
+  SIM -. estado del suelo / soil state .-> R
+  classDef alt fill:#d9f2dc,stroke:#3c8a46,color:#123;
+  class GEO,TEL,LEAN,MENU alt
+    </pre>
+  </div>
+
+  <div class="card">
+    <h2>Ciclo de vida por pista / Per-track lifecycle</h2>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Juego as MX Bikes
+  participant Nucleo as mx_dirt.dlo
+  participant Render as mx_dirt_render.dlo
+  Juego->>Nucleo: EventInit (pista, moto / track, bike)
+  Nucleo->>Nucleo: perfil de pista, cubiertas / track profile, tyres
+  Nucleo->>Nucleo: parches del motor, transporte / engine patches, transport
+  Nucleo->>Nucleo: sesión + pre-wear / session + pre-wear
+  Juego->>Render: EventInit
+  Render->>Render: hooks de GL (encadenados) / GL hooks (chained)
+  loop cada frame / every frame
+    Juego->>Nucleo: fuerzas de rueda / wheel forces
+    Nucleo->>Juego: tiles de terreno / terrain tiles
+    Juego->>Render: dibujo del terreno / terrain draw
+    Render->>Nucleo: MxDirtBorrowFrame
+  end
+  Juego->>Nucleo: cierre de pista / track close
+  Nucleo->>Nucleo: guardar suelo y capa / save soil and layer
+    </pre>
+  </div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  mermaid.initialize({ startOnLoad: true, theme: dark ? 'dark' : 'default', securityLevel: 'loose' });
+</script>
+</body>
+</html>
