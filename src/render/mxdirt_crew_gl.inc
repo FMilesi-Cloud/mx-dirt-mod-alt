@@ -32,6 +32,8 @@ typedef struct {int state;MxcModel m;GLuint vao,vbo,tex[MXC_MAX_PARTS];float spi
 typedef struct CrewGl {
  int state;GLuint prog,fx,fx_vao,fx_vbo;GLint u_view,u_proj,u_model,u_tex,f_view,f_proj,f_mode,f_time;
  CrewModel model[CREW_MODELS];uint64_t last;double time;int community,ini_read;
+ float offset;int offset_ok; /* window height - core height, measured at the rider's bike */
+ MxcRest pose;int pose_ok,pose_kind;float pose_x,pose_z; /* the machine's settled pose: a suspension, not a snap */
 } CrewGl;
 static GLuint crew_program(MxDirtGl *p,const char *vs,const char *fs){
  GLuint s[2]={p->shader(X_VERTEX_SHADER),p->shader(X_FRAGMENT_SHADER)},prog=0;const char *src[2]={vs,fs};int ok=s[0]&&s[1];
@@ -68,6 +70,19 @@ static float crew_ground(void *user,float x,float z){
   v[k]=(float)w->texels[2*((size_t)b*MXDIRT_SIDE+a)]/65535.f;}
  return w->texel0[1]+w->height_scale*((v[0]+(v[1]-v[0])*fx)*(1.f-fz)+(v[2]+(v[3]-v[2])*fx)*fz);
 }
+/* the window where it reaches, else the core's ground (a plane through the machine) moved onto the window's heights */
+typedef struct {const MxDirtWindow *w;const MxDirtCrewInput *in;float offset;int offset_ok;} CrewGround;
+static float crew_ground_any(void *user,float x,float z){
+ const CrewGround *g=user;const float y=crew_ground((void*)(uintptr_t)g->w,x,z);if(isfinite(y))return y;
+ if(!g->in->ground_ok||!g->offset_ok)return NAN;
+ /* the core's profile under the machine (7 x 3 in its own frame), bilinear; beyond it, the plane */
+ const MxDirtCrewInput *c=g->in;const float dx=x-c->x,dz=z-c->z,u=dx*c->fwd[0]+dz*c->fwd[1],v=dx*c->fwd[1]-dz*c->fwd[0];
+ const float fi=(u+4.5f)/1.5f,fk=(v+1.8f)/1.8f;
+ if(fi>=0.f&&fi<=6.f&&fk>=0.f&&fk<=2.f){const int i=fi>=6.f?5:(int)fi,k=fk>=2.f?1:(int)fk;const float a=fi-(float)i,b=fk-(float)k;
+  const float h=(c->grid[i][k]*(1.f-a)+c->grid[i+1][k]*a)*(1.f-b)+(c->grid[i][k+1]*(1.f-a)+c->grid[i+1][k+1]*a)*b;
+  if(isfinite(h))return h+g->offset;}
+ return c->y+g->offset+c->slope[0]*dx+c->slope[1]*dz;
+}
 static void mul4(float o[16],const float a[16],const float b[16]){
  for(int c=0;c<4;c++)for(int r=0;r<4;r++){float s=0.f;for(int k=0;k<4;k++)s+=a[k*4+r]*b[c*4+k];o[c*4+r]=s;}}
 static void xform(const float m[16],float x,float y,float z,float *o){
@@ -103,7 +118,17 @@ static void crew_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWin
  const double t=(double)now.QuadPart/(double)fq.QuadPart;float dt=g->last?(float)(t-(double)g->last/(double)fq.QuadPart):0.f;g->last=(uint64_t)now.QuadPart;
  if(!(dt>0.f)||dt>.2f)dt=0.f;g->time+=dt;
  const float half_w=.5f*(c->m.hi[0]-c->m.lo[0]),half_l=.5f*(c->m.hi[2]-c->m.lo[2]);
- float M[16];if(!mxc_place(M,in->x,in->z,in->fwd[0],in->fwd[1],.8f*half_w,.8f*half_l,crew_ground,(void*)w))return; /* outside the height window: too far to see */
+ if(in->ground_ok){const float yb=crew_ground((void*)(uintptr_t)w,in->ref[0],in->ref[1]);if(isfinite(yb)&&isfinite(in->ref[2])){g->offset=yb-in->ref[2];g->offset_ok=1;}}
+ CrewGround cg={w,in,g->offset,g->offset_ok};
+ /* rests on the real ground under its footprint (jumps, faces, ruts), eased like a suspension: it rises onto a
+    face quickly (it cannot sink into it) and settles a little slower; a jump in place (a new run) snaps */
+ MxcRest want;if(!mxc_rest(&want,in->x,in->z,in->fwd[0],in->fwd[1],.9f*half_w,.9f*half_l,crew_ground_any,&cg))return; /* no ground known there at all */
+ if(!g->pose_ok||g->pose_kind!=in->kind||hypotf(in->x-g->pose_x,in->z-g->pose_z)>8.f||fabsf(want.y-g->pose.y)>2.f||!(dt>0.f)){g->pose=want;g->pose_ok=1;}
+ else{const float up=1.f-expf(-dt/.05f),down=1.f-expf(-dt/.14f),tilt=1.f-expf(-dt/.10f);
+  g->pose.y+=(want.y-g->pose.y)*(want.y>g->pose.y?up:down);if(g->pose.y<want.y-.03f)g->pose.y=want.y-.03f; /* never more than 3 cm into the ground */
+  g->pose.pitch+=(want.pitch-g->pose.pitch)*tilt;g->pose.roll+=(want.roll-g->pose.roll)*tilt;}
+ g->pose_kind=in->kind;g->pose_x=in->x;g->pose_z=in->z;
+ float M[16];mxc_pose(M,in->x,in->z,in->fwd[0],in->fwd[1],&g->pose);
  /* the machine */
  p->use_program(g->prog);p->matrix(g->u_view,1,GL_FALSE,scope->modelview);p->matrix(g->u_proj,1,GL_FALSE,scope->projection);p->ui(g->u_tex,0);
  p->active_texture(X_TEXTURE0);p->bind_sampler(0,p->mipped);

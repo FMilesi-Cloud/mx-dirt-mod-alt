@@ -62,6 +62,7 @@ struct MxdirtSession {
     /* fork: animations - reset / smooth wave (wave 1 reset, 2 smooth) spreading from the bike's row, and the
        moisture easing toward a new value instead of jumping */
     int wave,wave_row,wave_done;float wave_reach,bike_x,bike_z,moist_target,moist_rate;float path_len;
+    int backlog; /* fork: the last publish left cells for the next frames */
 };
 static uint64_t qpc_now(void){LARGE_INTEGER t;QueryPerformanceCounter(&t);return (uint64_t)t.QuadPart;}
 static void timing_add(MxdirtSession *s,unsigned k,uint64_t ticks){s->timing_ticks[k]+=ticks;if(ticks>s->timing_max[k])s->timing_max[k]=ticks;}
@@ -333,6 +334,8 @@ int mxdirt_session_ease_moisture(MxdirtSession *s,float percent,float seconds){
     s->moist_target=t;s->moist_rate=fabsf(t-s->sim->p.moisture)/seconds;return 1;
 }
 /* fork: where the crew machine is (for the render): position along the line, heading over ~7 m of it, speed */
+int mxdirt_session_backlog(const MxdirtSession *s){return s&&s->backlog;}
+int mxdirt_session_bike(const MxdirtSession *s,float *x,float *z){if(!s||!x||!z||!isfinite(s->bike_x)||!isfinite(s->bike_z))return 0;*x=s->bike_x;*z=s->bike_z;return 1;}
 int mxdirt_session_crew_pose(const MxdirtSession *s,int *kind,float *x,float *z,float fwd[2],float *speed){
     if(!s||!kind||!x||!z||!fwd||!speed)return 0;*kind=0;
     if(!s->job||!s->path||s->path_n<2||s->job_at+1>=s->path_n)return 1;
@@ -342,6 +345,14 @@ int mxdirt_session_crew_pose(const MxdirtSession *s,int *kind,float *x,float *z,
     float fx=s->path[2*i1]-s->path[2*i0],fz=s->path[2*i1+1]-s->path[2*i0+1],fl=hypotf(fx,fz);
     if(!(fl>1e-3f)){fx=b[0]-a[0];fz=b[1]-a[1];fl=hypotf(fx,fz);}if(!(fl>1e-4f))return 1;
     fwd[0]=fx/fl;fwd[1]=fz/fl;*speed=s->job==1?8.f:11.f;*kind=s->job;return 1;
+}
+int mxdirt_session_crew_ground(const MxdirtSession *s,float x,float z,const float fwd[2],float *y,float slope[2],float ref[3],float grid[7][3]){
+    if(!s||!s->sim||!s->sim->base||!y||!slope||!ref||!fwd)return 0;const MxbSoilSim *m=s->sim;
+    if(grid)for(int i=0;i<7;i++)for(int k=0;k<3;k++){const float u=-4.5f+1.5f*(float)i,v=-1.8f+1.8f*(float)k; /* right = (fz, -fx) */
+        grid[i][k]=mxd_ground_m(m,x+fwd[0]*u+fwd[1]*v,z+fwd[1]*u-fwd[0]*v);if(!isfinite(grid[i][k]))return 0;}
+    *y=mxd_ground_m(m,x,z);slope[0]=(mxd_ground_m(m,x+2.f,z)-mxd_ground_m(m,x-2.f,z))/4.f;slope[1]=(mxd_ground_m(m,x,z+2.f)-mxd_ground_m(m,x,z-2.f))/4.f;
+    ref[0]=s->bike_x;ref[1]=s->bike_z;ref[2]=mxd_ground_m(m,s->bike_x,s->bike_z);
+    return isfinite(*y)&&isfinite(slope[0])&&isfinite(slope[1])&&isfinite(ref[2]);
 }
 int mxdirt_session_phase_stats(const MxdirtSession *s,MxdirtPhaseStats *o){
     if(!s||!o||!s->sim)return 0;memset(o,0,sizeof(*o));const MxbSoilSim *m=s->sim;
@@ -750,7 +761,7 @@ static void anim_step(MxdirtSession *s,float dt){
 /* fork (6): the crew job advances along the lap line at ~15 m/s; returns 0 when done. */
 static void crew_step(MxdirtSession *s,float dt){
     if(!s->job||!s->path||s->path_n<2)return;
-    float go=(s->job==1?8.f:11.f)*dt;const int kind=s->job;const float hw=kind==1?1.7f:2.2f; /* grader ~29 km/h, water truck ~40 */
+    float go=(s->job==1?8.f:11.f)*dt;const int kind=s->job;const float hw=kind==1?4.f:4.5f; /* grader ~29 km/h, water truck ~40; the whole track width (~8-9 m) */
     while(go>0.f&&s->job_at+1<s->path_n){
         const float *a=s->path+2*s->job_at,*b=a+2;const float seg=hypotf(b[0]-a[0],b[1]-a[1]),left=seg-s->job_len;
         if(left<=go){mxb_soil_service_band(s->sim,a[0],a[1],b[0],b[1],hw,kind);go-=left;s->job_m+=left;s->job_len=0.f;s->job_at++;}
@@ -846,14 +857,28 @@ int mxdirt_session_publish(MxdirtSession *s,uint64_t next_outer,MxdirtAcceptTarg
        sparse capacity (the pre-wear gate changes ~140k cells at once) is sent in
        capacity-sized pieces over the next frames - absolute cells, so a piece is
        always valid. Rejecting it instead would block publication for good. */
-    for(uint32_t z=0;z<s->c.height.destination_height&&!partial;z++){
-        size_t row=(size_t)z*s->c.height.destination_width;
+    /* fork: the rows nearest the bike go first. The game's queue takes cells in ascending order only, so: grow a
+       band of rows outward from the bike's row until it holds a piece's worth of unsent cells, then send that band
+       in ascending order (whatever is left goes in the next pieces). After a reset, a grader pass or a smooth (the
+       whole grid at once, sent over several seconds) the ground the rider is looking at changes first. */
+    const uint32_t H=s->c.height.destination_height,W=s->c.height.destination_width;
+    int32_t zc=(int32_t)lrintf((s->bike_z/s->sim->span_z+.5f)*(float)(H-1));if(zc<0)zc=0;if(zc>(int32_t)H-1)zc=(int32_t)H-1;
+    int32_t lo=zc,hi=zc;size_t want=0;
+    for(uint32_t k=0;k<2*H&&want<s->c.sparse_capacity;k++){
+        const int32_t zz=zc+((k&1u)?-(int32_t)((k+1)/2):(int32_t)(k/2));if(zz<0||zz>=(int32_t)H)continue;
+        const size_t row=(size_t)zz*W;size_t c=0;
+        for(uint32_t x=s->pending_begin[zz];x<s->pending_end[zz];x++)c+=s->accepted[row+x]!=s->target[row+x];
+        if(c){want+=c;if(zz<lo)lo=zz;if(zz>hi)hi=zz;}}
+    for(int32_t z=lo;z<=hi&&!partial;z++){
+        const size_t row=(size_t)z*W;
         for(uint32_t x=s->pending_begin[z];x<s->pending_end[z];x++){
             size_t j=row+x;if(s->accepted[j]==s->target[j])continue;
             if(n==s->c.sparse_capacity){partial=1;break;}
             s->changes[n++]=(MxbPubAbsoluteCell){(uint32_t)j,s->target[j]};
         }
     }
+    if(!partial)for(uint32_t z=0;z<H&&!partial;z++){if((int32_t)z>=lo&&(int32_t)z<=hi)continue; /* anything left outside the band: next piece */
+        const size_t row=(size_t)z*W;for(uint32_t x=s->pending_begin[z];x<s->pending_end[z];x++)if(s->accepted[row+x]!=s->target[row+x]){partial=1;break;}}
     if(!n){s->accepted_source_sequence=s->generated_sequence;s->force_publish=0;clear_candidates(s);return 1;}
     if(s->accepted_sequence==UINT64_MAX){s->faulted=1;return -1;}
     const uint64_t next_sequence=s->accepted_sequence+1;
@@ -863,6 +888,7 @@ int mxdirt_session_publish(MxdirtSession *s,uint64_t next_outer,MxdirtAcceptTarg
     if(result!=1){s->faulted=1;return -1;}
     for(size_t j=0;j<n;j++)s->accepted[s->changes[j].index]=s->changes[j].absolute;
     s->accepted_sequence=next_sequence;
+    s->backlog=partial;
     if(partial)return 1; /* the rest stays pending; the next frame sends the next piece */
     s->accepted_source_sequence=s->generated_sequence;s->force_publish=0;
     clear_candidates(s);return 1;

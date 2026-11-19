@@ -63,23 +63,51 @@ static inline int mxc_tga(FILE *f,unsigned char **rgba,int *w,int *h){
     *rgba=px;*w=W;*h=H;return 1;
 bad:free(px);return 0;
 }
-/* Where a crew machine sits: footprint corners on the ground give its tilt. ground(x,z) -> world y (NAN = unknown).
-   Returns 0 when the ground under it is unknown. m: column-major 4x4 model->world. */
+/* Where a crew machine sits on the real ground (the published terrain: track shape, jumps, ruts). It rests on it
+   like a vehicle: along its length on the highest ground under the front and under the rear (the upper hull of
+   5 stations), across on the highest ground left and right, never through it - over a crest it bridges, on a
+   face it pitches up, in a rut it sits on the edges. ground(x,z) -> world y (NAN = unknown). */
 typedef float (*MxcGround)(void *user,float x,float z);
-static inline int mxc_place(float m[16],float x,float z,float fx,float fz,float half_w,float half_l,MxcGround ground,void *user){
+typedef struct {float y,pitch,roll;} MxcRest; /* centre height, dy per m forward, dy per m right */
+/* the support line from above over points (u,h): the upper hull edge over u=0; returns its height at 0, slope in *k */
+static inline float mxc_support(const float *u,const float *h,int n,float *k){
+    /* on a vertex of the hull (a crest right under the middle) several lines fit: it balances between the
+       steepest-down and steepest-up of them (any mix of lines through one hull point stays above all points) */
+    float best=-1e30f,klo=0.f,khi=0.f,bk=0.f;int found=0;
+    for(int i=0;i<n;i++)for(int j=0;j<n;j++){if(i==j||!(u[j]<=0.f&&u[i]>=0.f&&u[i]>u[j]))continue;
+        const float kk=(h[i]-h[j])/(u[i]-u[j]),y0=h[j]-kk*u[j];int ok=1;
+        for(int q=0;q<n&&ok;q++)ok=h[q]<=y0+kk*u[q]+1e-4f;
+        if(!ok)continue;
+        if(!found||y0>best+1e-4f){best=y0;klo=khi=kk;found=1;}
+        else if(y0>best-1e-4f){if(kk<klo)klo=kk;if(kk>khi)khi=kk;}}
+    bk=.5f*(klo+khi);
+    if(!found){best=-1e30f;for(int q=0;q<n;q++)if(h[q]>best)best=h[q];bk=0.f;}
+    *k=fmaxf(-1.2f,fminf(1.2f,bk));return best;
+}
+static inline int mxc_rest(MxcRest *r,float x,float z,float fx,float fz,float half_w,float half_l,MxcGround ground,void *user){
     float fl=hypotf(fx,fz);if(!(fl>1e-4f))return 0;fx/=fl;fz/=fl;const float rx=fz,rz=-fx; /* right = up x forward */
-    const float yf=ground(user,x+fx*half_l,z+fz*half_l),yb=ground(user,x-fx*half_l,z-fz*half_l);
-    const float yr=ground(user,x+rx*half_w,z+rz*half_w),yl=ground(user,x-rx*half_w,z-rz*half_w);
-    if(!isfinite(yf)||!isfinite(yb)||!isfinite(yr)||!isfinite(yl))return 0;
-    /* forward and right along the ground, up = right x forward... kept orthonormal */
-    float F[3]={fx*2.f*half_l,yf-yb,fz*2.f*half_l},R[3]={rx*2.f*half_w,yr-yl,rz*2.f*half_w};
+    enum{NS=5,NV=3};float g[NS][NV],u[NS],v[NV]={-half_w,0.f,half_w};
+    for(int s=0;s<NS;s++){u[s]=half_l*((float)s/(NS-1)*2.f-1.f);
+        for(int k=0;k<NV;k++){g[s][k]=ground(user,x+fx*u[s]+rx*v[k],z+fz*u[s]+rz*v[k]);if(!isfinite(g[s][k]))return 0;}}
+    float h[NS];for(int s=0;s<NS;s++){h[s]=g[s][0];for(int k=1;k<NV;k++)if(g[s][k]>h[s])h[s]=g[s][k];}
+    float kp;mxc_support(u,h,NS,&kp);
+    float hv[NV];for(int k=0;k<NV;k++){hv[k]=-1e30f;for(int s=0;s<NS;s++){const float d=g[s][k]-kp*u[s];if(d>hv[k])hv[k]=d;}}
+    float kr;const float y=mxc_support(v,hv,NV,&kr);
+    r->y=y;r->pitch=kp;r->roll=kr;return isfinite(y);
+}
+/* column-major model->world from a rest pose */
+static inline void mxc_pose(float m[16],float x,float z,float fx,float fz,const MxcRest *r){
+    float fl=hypotf(fx,fz);fx/=fl;fz/=fl;const float rx=fz,rz=-fx;
+    float F[3]={fx,r->pitch,fz},R[3]={rx,r->roll,rz};
     float U[3]={F[1]*R[2]-F[2]*R[1],F[2]*R[0]-F[0]*R[2],F[0]*R[1]-F[1]*R[0]}; /* forward x right = up */
-    float ul=sqrtf(U[0]*U[0]+U[1]*U[1]+U[2]*U[2]),flen=sqrtf(F[0]*F[0]+F[1]*F[1]+F[2]*F[2]);if(!(ul>1e-6f)||!(flen>1e-6f))return 0;
-    for(int k=0;k<3;k++){U[k]/=ul;F[k]/=flen;}
-    if(U[1]<0.f)for(int k=0;k<3;k++)U[k]=-U[k];
+    float ul=sqrtf(U[0]*U[0]+U[1]*U[1]+U[2]*U[2]),fn=sqrtf(F[0]*F[0]+F[1]*F[1]+F[2]*F[2]);
+    for(int k=0;k<3;k++){U[k]/=ul;F[k]/=fn;}if(U[1]<0.f)for(int k=0;k<3;k++)U[k]=-U[k];
     float Rr[3]={U[1]*F[2]-U[2]*F[1],U[2]*F[0]-U[0]*F[2],U[0]*F[1]-U[1]*F[0]}; /* up x forward = right */
-    const float y=.25f*(yf+yb+yr+yl);
     m[0]=Rr[0];m[1]=Rr[1];m[2]=Rr[2];m[3]=0.f;m[4]=U[0];m[5]=U[1];m[6]=U[2];m[7]=0.f;
-    m[8]=F[0];m[9]=F[1];m[10]=F[2];m[11]=0.f;m[12]=x;m[13]=y;m[14]=z;m[15]=1.f;return 1;
+    m[8]=F[0];m[9]=F[1];m[10]=F[2];m[11]=0.f;m[12]=x;m[13]=r->y;m[14]=z;m[15]=1.f;
+}
+/* kept for callers that want the old one-call form */
+static inline int mxc_place(float m[16],float x,float z,float fx,float fz,float half_w,float half_l,MxcGround ground,void *user){
+    MxcRest r;if(!mxc_rest(&r,x,z,fx,fz,half_w,half_l,ground,user))return 0;mxc_pose(m,x,z,fx,fz,&r);return 1;
 }
 #endif

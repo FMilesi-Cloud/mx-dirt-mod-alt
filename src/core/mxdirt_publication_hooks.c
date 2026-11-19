@@ -16,6 +16,7 @@ struct MxbPublicationHooks {
  volatile LONG faulted,in_publisher,failure_result;int fail_line;
  MxbPublicationHookState stats;
  size_t cap_tiles;LONGLONG gap_ticks,last_send; /* pacing (mxb_publication_hooks_pacing) */
+ long focus_x,focus_z;int focus_on;size_t flagged; /* fork: tiles nearest the rider first; flagged tiles at the last call */
 };
 static MxbPublicationHooks *volatile bound;
 static const unsigned char publisher_call[5]={0xe8,0x66,0xf6,0xff,0xff};
@@ -129,6 +130,9 @@ int mxb_publication_hooks_recover(MxbPublicationHooks *h,DWORD thread){
  InterlockedExchange(&h->failure_result,0);h->fail_line=0;InterlockedExchange(&h->faulted,0);
  if(!binding(h,1)){fail(h,MXB_PUB_FAULT);return 0;}return 1;
 }
+/* fork: the rider's tile (64-cell tiles, x across, z along the grid rows); tx < 0 = no focus (round robin) */
+void mxb_publication_hooks_focus(MxbPublicationHooks *h,long tx,long tz){if(!h)return;h->focus_on=tx>=0&&tz>=0;h->focus_x=tx;h->focus_z=tz;}
+size_t mxb_publication_hooks_flagged(const MxbPublicationHooks *h){return h?h->flagged:0;}
 int mxb_publication_hooks_pacing(MxbPublicationHooks *h,size_t max_tiles,uint32_t interval_ms){
  if(!h||h->in_publisher||!h->cap_tiles)return 0;
  h->c.max_batch_tiles=max_tiles<1?1:max_tiles>h->cap_tiles?h->cap_tiles:max_tiles;
@@ -189,7 +193,16 @@ int mxb_publication_dirty(MxbPublicationHooks *h,int id,unsigned mode,unsigned c
  /* send_interval_ms: nothing this call if the last batch went out less than the interval ago (every flagged
     tile is put back below, exactly as the tiles over max_batch_tiles are) */
  LARGE_INTEGER now;QueryPerformanceCounter(&now);if(h->gap_ticks&&now.QuadPart-h->last_send<h->gap_ticks)cap=0;
- for(size_t step=0;step<h->tiles&&selected<cap;step++){
+ /* fork: the flagged tiles nearest the rider's tile go first (after a reset or a grader pass the whole track is
+    flagged: the ground ahead must not wait its turn behind the far end of the map); round robin without a focus */
+ {size_t n=0;for(size_t tile=0;tile<h->tiles;tile++)n+=snapshot[tile]!=0;h->flagged=n;}
+ if(h->focus_on&&cap){const size_t tx_n=(h->c.pending.width+63)/64;size_t best[16];long bd[16];size_t nb=0;const size_t want=cap<16?cap:16;
+  for(size_t tile=0;tile<h->tiles;tile++){if(!snapshot[tile])continue;
+   const long dx=(long)(tile%tx_n)-h->focus_x,dz=(long)(tile/tx_n)-h->focus_z,d=dx*dx+dz*dz;
+   size_t at=nb;while(at>0&&bd[at-1]>d)at--;if(at>=want)continue;
+   if(nb<want)nb++;for(size_t k=nb-1;k>at;k--){best[k]=best[k-1];bd[k]=bd[k-1];}best[at]=tile;bd[at]=d;}
+  for(size_t k=0;k<nb;k++){h->chosen[best[k]]=1;selected++;}}
+ else for(size_t step=0;step<h->tiles&&selected<cap;step++){
   size_t tile=(h->cursor+step)%h->tiles;
   if(snapshot[tile]){h->chosen[tile]=1;selected++;last=(tile+1)%h->tiles;}
  }

@@ -73,11 +73,15 @@ static inline void mxd_berm_step(MxdEvents *s,MxbSoilSim *m,const MxdirtContact 
         if(!i->contact||!(fl>1e-4f)||!(ll>1e-4f)||!(i->dt>0.f)||s->crashed){s->turn_have[w]=0;continue;}
         const float f[2]={i->forward[0]/fl,i->forward[2]/fl},la[2]={i->lateral[0]/ll,i->lateral[2]/ll};
         const float v=(i->center_velocity[0]*f[0]+i->center_velocity[2]*f[1])*nm;
-        float acc=0.f,side=0.f;
-        if(s->turn_have[w]){const float df0=f[0]-s->turn_f[w][0],df1=f[1]-s->turn_f[w][1];side=df0*la[0]+df1*la[1]; /* toward the turn centre */
-            const float rate=hypotf(df0,df1)/i->dt;acc=fabsf(v)*rate;if(!isfinite(acc)||rate>6.f)acc=0.f;}
-        s->turn_f[w][0]=f[0];s->turn_f[w][1]=f[1];s->turn_have[w]=1;
-        s->turn_acc[w]+=(acc-s->turn_acc[w])*fminf(1.f,i->dt/.1f); /* ~0.1 s: no jolt from one bumpy frame */
+        /* the turn from the way the wheel actually travels (its velocity), not where it points: the front wheel
+           steers, and every steering correction read as a hard turn (2133 blowouts in one ride) */
+        const float vx=i->center_velocity[0],vz=i->center_velocity[2],vl=hypotf(vx,vz);
+        if(!(vl>1e-4f)){s->turn_have[w]=0;continue;}
+        const float d[2]={vx/vl,vz/vl};float acc=0.f,side=0.f;
+        if(s->turn_have[w]){const float df0=d[0]-s->turn_f[w][0],df1=d[1]-s->turn_f[w][1];side=df0*la[0]+df1*la[1]; /* toward the turn centre */
+            const float rate=hypotf(df0,df1)/i->dt;acc=fabsf(v)*rate;if(!isfinite(acc)||rate>3.f)acc=0.f;}
+        s->turn_f[w][0]=d[0];s->turn_f[w][1]=d[1];s->turn_have[w]=1;
+        s->turn_acc[w]+=(acc-s->turn_acc[w])*fminf(1.f,i->dt/.2f); /* ~0.2 s: no jolt from one bumpy frame */
         if(fabsf(side)>1e-6f)s->turn_side[w]=side>0.f?1.f:-1.f;
         if(!(s->berm_gain>0.f)||!i->deformation||!(v>5.f)||!(s->turn_acc[w]>4.f)||!s->turn_side[w]||!isfinite(i->load_n))continue;
         const float o[2]={-s->turn_side[w]*la[0],-s->turn_side[w]*la[1]}; /* away from the turn centre */
@@ -88,9 +92,9 @@ static inline void mxd_berm_step(MxdEvents *s,MxbSoilSim *m,const MxdirtContact 
         lo=fminf(lo,rise);if(!(lo>.03f))continue; /* a solid berm: nothing loose to blow */
         const float push=i->load_n*fminf(3.f,s->turn_acc[w]/9.81f);
         const float wet=1.f-1.2f*fabsf(mo-.4f),solid=fmaxf(0.f,rise-lo)/rise;
-        const float hold=2500.f*(.35f+pk)*fmaxf(.3f,wet)*fminf(1.4f,.12f/lo)*(1.f+2.f*solid)/s->berm_gain;
+        const float hold=3800.f*(.35f+pk)*fmaxf(.3f,wet)*fminf(1.4f,.12f/lo)*(1.f+2.f*solid)/s->berm_gain;
         const float ratio=push/fmaxf(1.f,hold);s->berm_frames[ratio<.5f?0:ratio<.8f?1:ratio<1.f?2:3]++;
-        if(ratio<1.f||(s->berm_blows&&hypotf(cx-s->berm_x,cz-s->berm_z)<.8f))continue; /* not the same crest twice */
+        if(ratio<1.f||(s->berm_blows&&hypotf(cx-s->berm_x,cz-s->berm_z)<1.5f))continue; /* not the same crest twice */
         const float drop=fminf(.08f,fminf(.7f*lo,.45f*rise*fminf(1.5f,ratio-.6f)));
         m->cur_on=1;const float vol=mxd_band_cut(m,cx,cz,f,-.45f,.45f,.16f,drop,m->p.hardpan);
         if(vol>0.f)mxb_ss_deposit(m,cx+o[0]*.38f,cz+o[1]*.38f,f,-.55f,.55f,.22f,vol);

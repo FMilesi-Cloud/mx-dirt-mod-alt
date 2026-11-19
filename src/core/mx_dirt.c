@@ -483,6 +483,8 @@ static void ra_solver_destroy(void){
    from the session's category and the bike id. The class comes first: the OEM pack puts 250 two-strokes in MX1
    (MX1OEM_1996_Honda_CR250) and 125s in MX2 (MX2OEM_2023_KTM_125_SX), so the engine size alone would misread them.
    MX2 gates are mostly 250 four-strokes with some 125s; MX1 mostly 450s; MX3 (300-500 2T) big; MXE (electric) mid. */
+#include "mxdirt_centerline.h"
+static MxcSeg ra_cl[4096];static int ra_cl_n; /* fork: the track's centre line (TrackCenterline, below) */
 /* fork, phases 3-6 settings -> session */
 static int ra_apply_phases(void){
  MxdirtPhases v={(float)ra_exposed_pct,(float)ra_crust_pct,(float)ra_puddles_pct,(float)ra_erosion_pct,(float)ra_whoops_pct,(float)ra_lips_real};
@@ -744,6 +746,11 @@ static __declspec(noinline) int ra_outer(int elapsed) {
        if(ra_transport&&ra_transport_recovery_budget&&mxb_transport_state(ra_transport,&st)&&st.faulted){
         if(ra_transport_fault_have!=2){ra_transport_fault_state=st;ra_transport_fault_got=1;ra_transport_fault_have=1;}
         if(mxb_transport_recover(ra_transport,ra_owner)){ra_transport_recoveries++;ra_transport_recovery_budget--;offer=0;}}}
+      {static int boosted;const size_t waiting=mxb_transport_flagged(ra_transport); /* fork: a big change is draining */
+       const int want=mxdirt_session_backlog(ra_session)||waiting>12;
+       if(want!=boosted&&mxb_transport_pacing(ra_transport,want?8:ra_batch_tiles,want?0:ra_send_interval))boosted=want;
+       float bx,bz;if(mxdirt_session_bike(ra_session,&bx,&bz)) /* the rider's 64-cell tile: those go first */
+        mxb_transport_focus(ra_transport,(long)((bx/ra_geom.span_x+.5f)*(float)(ra_geom.width-1))/64,(long)((bz/ra_geom.span_z+.5f)*(float)(ra_geom.height-1))/64);}
       if(offer<0){ra_phase=0;ra_fault(-122);}
       else if(!offer)ra_publish_deferred++;else ra_publish_accepted++;
       if(offer<=0)ra_mark(RA_PUBLISH,offer);
@@ -888,7 +895,7 @@ static int ra_prepare_transport(void) {
  c.near_code=ra_transport_code;c.near_code_bytes=4096;c.span=ra_span;
  c.target_capacity=2;c.native_event_capacity=32;c.max_changed_cells=RA_CELLS<65536?RA_CELLS:65536;
  size_t tiles=(size_t)((ra_geom.width+63)/64)*((ra_geom.height+63)/64);
- c.max_batch_tiles=tiles<4?tiles:4;c.trace_capacity=1024;
+ c.max_batch_tiles=tiles<8?tiles:8;c.trace_capacity=1024; /* fork: 8 while a big change drains (else the [terrain] batch_tiles setting) */
  ra_transport_config=c;MxbTransportFacts f=ra_facts(1,0);
  MxbTransportCreateReport report;
  ra_transport=mxb_transport_create_report(&c,&f,&report);
@@ -967,7 +974,8 @@ API int MxDirtBorrowFrame(uint32_t abi,uint32_t bytes,MxDirtFrame *out){
  f.sim_print=v.print;f.sim_print_dir=v.print_dir;f.sim_print_off=v.print_off;
  f.sim_water=v.water;f.sim_crust=v.crust;f.sim_exposed=v.exposed;
  {int kind=0;float cx=0.f,cz=0.f,cf[2]={0.f,1.f},cs=0.f; /* fork: the track crew for the render */
-  if(mxdirt_session_crew_pose(ra_session,&kind,&cx,&cz,cf,&cs)&&kind){f.crew_kind=kind;f.crew_x_m=cx;f.crew_z_m=cz;f.crew_fwd[0]=cf[0];f.crew_fwd[1]=cf[1];f.crew_speed=cs;}}
+  if(mxdirt_session_crew_pose(ra_session,&kind,&cx,&cz,cf,&cs)&&kind){f.crew_kind=kind;f.crew_x_m=cx;f.crew_z_m=cz;f.crew_fwd[0]=cf[0];f.crew_fwd[1]=cf[1];f.crew_speed=cs;
+   f.crew_ground_ok=mxdirt_session_crew_ground(ra_session,cx,cz,cf,&f.crew_y,f.crew_slope,f.crew_ref,f.crew_grid);}}
  if(!f.sim_water||!f.sim_crust||!f.sim_exposed||!f.sim_comp||!f.sim_loose||!f.sim_moist||!f.sim_clods||!f.sim_print||!f.sim_print_dir||!f.sim_print_off)goto end;
  {MxdirtSoftView sv;if(mxdirt_session_soft_view(ra_session,&sv)&&sv.tile&&sv.serial){
    f.soft_cell_m=sv.cell;f.soft_thickness_m=sv.thickness;f.soft_tiles_x=sv.tiles_x;f.soft_tiles_z=sv.tiles_z;f.soft_tile_side=sv.tile_side;f.soft_unit_um=1000;
@@ -1162,6 +1170,17 @@ API __declspec(noinline) void RunStop(void){
 }
 API void RunDeinit(void){RunStop();ra_bootstrap_abort(-10);if(GetCurrentThreadId()==ra_owner&&!ra_inflight&&!ra_bootstrap_remove())ra_fault(-129);}
 API void RunTelemetry(void *data,int size,float time,float pos){(void)time;(void)pos;ra_telemetry_in(data,size);}
+/* fork: the track's centre line (plugin API TrackCenterline, called at event init). Segments: type 0 straight /
+   1 curve, length m, radius m (< 0 left, 0 straight), start heading in degrees, start x/z m, start height.
+   The heading convention is found from the data itself: the one whose integrated segments end where the next
+   one starts (mxdirt_centerline.h). Used as the track crew's line (down the middle, the whole lap). */
+API void TrackCenterline(int count,void *segments,void *race){
+ (void)race;ra_cl_n=0;if(!segments||count<=0)return;if(count>4096)count=4096;
+ const float *f=(const float*)segments;
+ for(int i=0;i<count;i++){const int32_t *ti=(const int32_t*)(f+7*i);MxcSeg s={*ti,f[7*i+1],f[7*i+2],f[7*i+3],{f[7*i+4],f[7*i+5]}};
+  if(!isfinite(s.len)||!isfinite(s.radius)||!isfinite(s.angle)||!isfinite(s.start[0])||!isfinite(s.start[1])||s.len<0.f||s.len>5000.f){ra_cl_n=0;return;}
+  ra_cl[ra_cl_n++]=s;}
+}
 /* Online wear (experimental): where the game says every bike is. Only copied here; the session turns the
    other bikes' tracks into tyre passes on its next step, once the layout of these positions has been
    proven against the local bike (mxdirt_remote.h). */

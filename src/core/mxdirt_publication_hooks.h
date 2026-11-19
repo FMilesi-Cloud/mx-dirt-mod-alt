@@ -60,6 +60,8 @@ int mxb_publication_hooks_recover(MxbPublicationHooks *,DWORD owner_thread);
    max_batch_tiles) and, with interval_ms > 0, a batch at most every interval_ms (tiles wait, flagged, in the
    game's own dirty list meanwhile). Owner thread, outside the publisher. */
 int mxb_publication_hooks_pacing(MxbPublicationHooks *,size_t max_tiles,uint32_t interval_ms);
+void mxb_publication_hooks_focus(MxbPublicationHooks *,long tile_x,long tile_z); /* fork */
+size_t mxb_publication_hooks_flagged(const MxbPublicationHooks *); /* fork: tiles waiting at the game's last call */
 
 /* Exact ABI entrypoints for the callsite and client stream4 DirtyFn slot. */
 int mxb_publication_publisher_entry(void);

@@ -39,7 +39,12 @@
      sim_exposed   bare hard base 0 / 255 */
 /* ABI 5 (fork, track crew): crew_kind 0 none, 1 grader, 2 water truck, driving along the rider's line;
      crew_x_m/crew_z_m from the terrain centre (as the sim), crew_fwd unit heading (x,z), crew_speed m/s. */
-enum { MXDIRT_FRAME_ABI = 5 };
+/* ABI 6: crew_y (ground under the machine, sim metres: track shape + wear), crew_slope (dy/dx, dy/dz) and crew_ref
+     {x, z, y}: the same at the rider's bike - the render matches it with its own heights there and so can place
+     the machine beyond its height window. crew_ground_ok 0 = not available. */
+/* ABI 7: crew_grid[7][3]: the core's ground (as crew_y) under the machine, 7 stations along its heading from -4.5 to
+     +4.5 m by 1.5 m, at -1.8 / 0 / +1.8 m to its right - the real profile (jumps, faces) where the window does not reach */
+enum { MXDIRT_FRAME_ABI = 7 };
 typedef struct {
     uint32_t abi, bytes, owner_thread, reserved;
     uint64_t generation;          /* changes on every track load */
@@ -55,6 +60,8 @@ typedef struct {
     const uint8_t *const *soft_tile; const uint32_t *soft_tile_serial;
     const uint8_t *sim_water, *sim_crust, *sim_exposed;
     int32_t crew_kind; float crew_x_m, crew_z_m, crew_fwd[2], crew_speed;
+    int32_t crew_ground_ok; float crew_y, crew_slope[2], crew_ref[3];
+    float crew_grid[7][3];
 } MxDirtFrame;
 /* Returns 1 and fills *out, or 0 (core not live / wrong thread / abi or bytes mismatch). */
 typedef int (*MxDirtBorrowFrameFn)(uint32_t abi, uint32_t bytes, MxDirtFrame *out);

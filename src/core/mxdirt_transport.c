@@ -291,6 +291,8 @@ int mxb_transport_state(const MxdirtTransport *t,MxbTransportState *out){
 int mxb_transport_timing(const MxdirtTransport *t,MxbTransportTiming *out){
  if(!t||!out||!owner(t,GetCurrentThreadId()))return 0;*out=t->timing;return 1;
 }
+void mxb_transport_focus(MxdirtTransport *t,long tile_x,long tile_z){if(t&&owner(t,GetCurrentThreadId()))mxb_publication_hooks_focus(t->hooks,tile_x,tile_z);}
+size_t mxb_transport_flagged(const MxdirtTransport *t){return t?mxb_publication_hooks_flagged(t->hooks):0;}
 int mxb_transport_pacing(MxdirtTransport *t,size_t max_tiles,uint32_t interval_ms){
  return t&&owner(t,GetCurrentThreadId())&&mxb_publication_hooks_pacing(t->hooks,max_tiles,interval_ms);
 }

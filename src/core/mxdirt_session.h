@@ -70,6 +70,13 @@ int mxdirt_session_service(MxdirtSession *,int kind,int instant);
 /* fork: the crew machine for the render: kind 0 none, 1 grader, 2 water truck; position (m from the terrain centre),
    unit heading, speed m/s. */
 int mxdirt_session_crew_pose(const MxdirtSession *,int *kind,float *x,float *z,float fwd[2],float *speed);
+/* fork: ground under (x,z) from the sim (track shape + wear, m), its slope (dy/dx, dy/dz) and the same height at the
+   bike {x, z, y}: lets the render place the machine where its own height window does not reach. */
+int mxdirt_session_crew_ground(const MxdirtSession *,float x,float z,const float fwd[2],float *y,float slope[2],float ref[3],float grid[7][3]);
+/* fork: 1 while a big change (reset, grader, smooth) is still being handed to the game piece by piece */
+int mxdirt_session_backlog(const MxdirtSession *);
+/* fork: the rider's last contact, m from the terrain centre */
+int mxdirt_session_bike(const MxdirtSession *,float *x,float *z);
 /* fork: reset (1) / smooth (2) as a ~3 s wave spreading from the bike (mxdirt_session_terrain_op does it at once). */
 int mxdirt_session_terrain_wave(MxdirtSession *,int op);
 /* fork: ease the soil moisture to percent over seconds (0 = at once). */

@@ -58,8 +58,8 @@ Todo el mérito del sistema de tierra (simulación del suelo, publicación en el
 | Charcos y erosión | La lluvia (Overhaul o el clima del juego) se junta en los surcos (barro) y baja por las pendientes llevándose tierra. |
 | Whoops de arena | En rectas de arena crecen whoops regulares vuelta a vuelta. |
 | Labios realistas (opcional) | Los labios se gastan y forman kicker; los aterrizajes cortos cavan pozos. Apagado por defecto. |
-| Cuadrilla de pista | Niveladora y camión regador en 3D que recorren tu línea grabada y alisan o riegan detrás. Ruedas que giran, sombra y rocío. |
-| Animaciones | Resetear y alisar avanzan como una ola desde la moto; el riego moja de a poco; una línea en pantalla muestra el avance. Se pueden saltar ("Saltar animaciones"). |
+| Cuadrilla de pista | Niveladora y camión regador en 3D que recorren la línea central de la pista (la que da el juego) por el medio, aplanando o regando unos 8 m de ancho. Apoyados sobre el suelo real (suben las caras, cruzan las crestas), visibles a cualquier distancia, ruedas que giran, sombra y rocío. |
+| Animaciones | Resetear y alisar avanzan como una ola desde la moto; el riego moja de a poco; una línea en pantalla muestra el avance. Se pueden saltar ("Saltar animaciones"). Después de un cambio grande el juego recibe primero el terreno más cercano, en tandas más grandes. |
 
 **Máquinas 3D.** El mod trae sus propios modelos low-poly (niveladora y camión regador, hechos para este proyecto, GPL-3.0). Si querés usar modelos de la comunidad, convertilos con `tools/crew_export.py` (Blender) y ponelos en `plugins\mx_dirt_data\crew\community\dozer` y `...\truck`; el F8 deja elegir. Probado con el **J9 Bull Dozer** de [Jason9](https://mxb-mods.com/j9-bull-dozer/) y el **Water/Dump Truck v1** de [RedRider197](https://mxb-mods.com/water-dump-truck-v1/). Esos modelos **no se incluyen** en este repo: son de sus autores, bajalos de sus páginas.
 
@@ -287,8 +287,8 @@ All the credit for the dirt system (soil simulation, publishing into the game's 
 | Puddles and erosion | Rain (Overhaul or the game's weather) pools in ruts (mud) and runs downhill carrying soil. |
 | Sand whoops | Regular whoops grow lap after lap on sand straights. |
 | Realistic lips (optional) | Lips wear into kickers, short landings dig holes. Off by default. |
-| Track crew | A 3D grader and water truck drive your recorded line, smoothing or watering behind them. Turning wheels, shadow and spray. |
-| Animations | Reset and smooth spread as a wave from the bike; watering soaks in gradually; an on-screen line shows progress. Can be skipped ("Skip animations"). |
+| Track crew | A 3D grader and water truck drive the track's centre line (from the game) down the middle, grading or watering ~8 m wide. They rest on the real ground (up faces, over crests), show at any distance, with turning wheels, shadow and spray. |
+| Animations | Reset and smooth spread as a wave from the bike; watering soaks in gradually; an on-screen line shows progress. Can be skipped ("Skip animations"). After a big change the game gets the nearest ground first, in bigger batches. |
 
 **3D machines.** The mod ships its own low-poly models (grader and water truck, made for this project, GPL-3.0). To use community models, convert them with `tools/crew_export.py` (Blender) into `plugins\mx_dirt_data\crew\community\dozer` and `...\truck`; the F8 menu picks them. Tested with **J9 Bull Dozer** by [Jason9](https://mxb-mods.com/j9-bull-dozer/) and **Water/Dump Truck v1** by [RedRider197](https://mxb-mods.com/water-dump-truck-v1/). Those models are **not included** here: they belong to their authors, get them from their pages.
 

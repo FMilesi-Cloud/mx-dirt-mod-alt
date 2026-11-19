@@ -70,6 +70,9 @@ typedef struct {
 int mxb_transport_timing(const MxdirtTransport *,MxbTransportTiming *);
 /* see mxb_publication_hooks_pacing */
 int mxb_transport_pacing(MxdirtTransport *,size_t max_tiles,uint32_t interval_ms);
+/* fork: hand the game the tiles nearest the rider's tile first; how many tiles were waiting at its last call */
+void mxb_transport_focus(MxdirtTransport *,long tile_x,long tile_z);
+size_t mxb_transport_flagged(const MxdirtTransport *);
 MxdirtTransport *mxb_transport_create(const MxbTransportConfig *,const MxbTransportFacts *);
 /* First rejected startup predicate, captured synchronously on the owner.
    Strings are static; this report never borrows native memory. */

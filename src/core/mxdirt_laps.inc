@@ -85,23 +85,36 @@ static unsigned ra_lap_list(const char *dir,char names[64][MAX_PATH]){
 static char ra_lap_names[64][MAX_PATH];
 static void ra_ghost_load(void){
  ra_ghost_recording_reset();ra_lap_join(); /* a lap still being written must be in the folder before it is listed */
- if((!ra_ghost_riders&&!ra_prewear_riders)||!ra_session)return;
+ if(!ra_session)return;
  char dir[MAX_PATH];unsigned count=0;const char *source=RA_LAPS_DIR;
  if(ra_lap_dir(RA_LAPS_DIR,dir,sizeof(dir),0))count=ra_lap_list(dir,ra_lap_names);
  if(!count&&ra_lap_dir(RA_OLD_LAPS_DIR,dir,sizeof(dir),0)){count=ra_lap_list(dir,ra_lap_names);source=RA_OLD_LAPS_DIR;}
  unsigned want=ra_ghost_riders<MXDIRT_SESSION_MAX_GHOSTS?ra_ghost_riders:MXDIRT_SESSION_MAX_GHOSTS;
  if(ra_prewear_riders&&want<4)want=4; /* pre-wear rides up to the 4 fastest laps */
+ if(want<1)want=1; /* fork: one lap at least - the track crew's fallback line */
  for(unsigned i=0;i<count&&ra_ghost_n<want;i++){char path[MAX_PATH];
   if(snprintf(path,sizeof(path),"%s\\%s",dir,ra_lap_names[i])<(int)sizeof(path)&&mxb_dirt_ghost_load(path,ra_event_track,ra_ghosts+ra_ghost_n))ra_ghost_n++;}
- /* fork (6): the first loaded lap's rear-wheel line, a point every ~1 m, is the line the track crew follows */
- if(ra_ghost_n){const MxbDirtGhostLap *g=ra_ghosts;const float nm=(float)ra_config.height.native_metres;uint32_t n=0;
+ /* fork (6): the track crew's line: the track's centre line from the game when it is sound (down the middle, the
+    whole lap); else the first loaded lap's rear-wheel line, a point every ~1 m */
+ int crew_set=0;
+ if(ra_cl_n>=2&&ra_geom_valid){float *xz=malloc((size_t)20000*2*sizeof(float));
+  if(xz){MxcFit fit;const uint32_t n=mxc_centerline(ra_cl,ra_cl_n,xz,20000,1.f,&fit);
+   /* world -> the sim's metres from the terrain centre */
+   uint32_t inside=0;for(uint32_t i=0;i<n;i++){xz[2*i]-=ra_geom.origin[0]+.5f*ra_geom.span_x;xz[2*i+1]-=ra_geom.origin[2]+.5f*ra_geom.span_z;
+    inside+=fabsf(xz[2*i])<.5f*ra_geom.span_x&&fabsf(xz[2*i+1])<.5f*ra_geom.span_z;}
+   const int sound=n>=50&&fit.gap_m<1.5f&&inside>=n*9/10;
+   crew_set=sound&&mxdirt_session_set_path(ra_session,xz,n);
+   if(ra_log){fprintf(ra_log,"{\"kind\":\"crew_line\",\"source\":\"centerline\",\"ok\":%d,\"segments\":%d,\"points\":%u,\"length_m\":%.0f,\"convention\":%d,\"mean_gap_m\":%.3f,\"inside_percent\":%u}\n",
+    crew_set,ra_cl_n,n,fit.length_m,fit.convention,fit.gap_m,n?inside*100/n:0);fflush(ra_log);}
+   free(xz);}}
+ if(!crew_set&&ra_ghost_n){const MxbDirtGhostLap *g=ra_ghosts;const float nm=(float)ra_config.height.native_metres;uint32_t n=0;
   float *xz=malloc((size_t)20000*2*sizeof(float));
   if(xz){for(uint32_t i=0;i<g->h.samples&&n<20000;i++){const MxbDirtGhostSample *p=g->s+i;if(p->wheel!=1)continue;const float x=p->x*nm,z=p->z*nm;
     if(!isfinite(x)||!isfinite(z))continue;if(n&&hypotf(x-xz[2*n-2],z-xz[2*n-1])<1.f)continue;
-    if(n&&hypotf(x-xz[2*n-2],z-xz[2*n-1])>8.f){if(n>=2)break;n=0;} /* a jump in the recording: keep the first clean run */
+    if(n&&hypotf(x-xz[2*n-2],z-xz[2*n-1])>45.f){if(n>=2)break;n=0;} /* a respawn in the recording (jumps, up to ~40 m in the air, are kept: the line runs straight across) */
     xz[2*n]=x;xz[2*n+1]=z;n++;}
    const int ok=n>=50&&mxdirt_session_set_path(ra_session,xz,n);free(xz);
-   if(ra_log){fprintf(ra_log,"{\"kind\":\"crew_line\",\"ok\":%d,\"points\":%u}\n",ok,n);fflush(ra_log);}}}
+   if(ra_log){fprintf(ra_log,"{\"kind\":\"crew_line\",\"source\":\"lap\",\"ok\":%d,\"points\":%u}\n",ok,n);fflush(ra_log);}}}
  /* A track saved after a ride already holds its pre-wear; wear it again only when fresh
     (more than ~300 m2 moved over 1.5 cm = a ridden track; prewear_fresh_only=0 restores stacking) */
  uint64_t saved=ra_prewear_riders?mxdirt_session_saved_wear(ra_session,.015):0;int skip=ra_prewear_fresh_only&&saved>4000;

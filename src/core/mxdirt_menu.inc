@@ -57,8 +57,8 @@ static const MenuRow menu_track[]={
  {"Alisar (surcos a la mitad)","Smooth (ruts halved)",MK_ACT,0,0,0,0,0,0,0,"",0,A_SMOOTH},
  {"Regar la pista","Water the track",MK_ACT,0,0,0,0,0,0,0,"",0,A_WATER},
  {"Saltar animaciones (todo al instante)","Skip animations (everything at once)",MK_VAL,0,"menu","skip_animations",0,1,1,0,"",0,0},
- {"Pasar la niveladora (por mi linea)","Run the grader (along my line)",MK_ACT,0,0,0,0,0,0,0,"",0,A_GRADER},
- {"Pasar el camion regador (por mi linea)","Run the water truck (along my line)",MK_ACT,0,0,0,0,0,0,0,"",0,A_TRUCK},
+ {"Pasar la niveladora (por la pista)","Run the grader (along the track)",MK_ACT,0,0,0,0,0,0,0,"",0,A_GRADER},
+ {"Pasar el camion regador (por la pista)","Run the water truck (along the track)",MK_ACT,0,0,0,0,0,0,0,"",0,A_TRUCK},
  {"Desgaste inicial (pilotos)","Starting wear (riders)",MK_VAL,0,"soil","prewear_riders",0,400,10,50,"",1,0},
  {"Dispersion de lineas","Line spread",MK_VAL,0,"soil","prewear_spread_cm",0,500,10,140,"cm",1,0},
  {"Mantener desgaste guardado","Keep saved wear",MK_VAL,0,"soil","prewear_fresh_only",0,1,1,1,"",1,0},
@@ -214,8 +214,8 @@ static void menu_action(int op){
  switch(op){
  case A_GRADER:case A_TRUCK:
   if(!ra_session){menu_say(TR("Primero entra a la pista","Get on the track first"));break;}
-  {MxdirtPhaseStats q;if(!mxdirt_session_phase_stats(ra_session,&q)||q.path_points<50){menu_say(TR("Hace falta una vuelta grabada en esta pista","Needs a recorded lap on this track"));break;}}
-  InterlockedExchange(&ra_menu_request,op);menu_say(op==A_GRADER?TR("La niveladora sale por tu linea","The grader is out on your line"):TR("El regador sale por tu linea","The water truck is out on your line"));break;
+  {MxdirtPhaseStats q;if(!mxdirt_session_phase_stats(ra_session,&q)||q.path_points<50){menu_say(TR("No hay linea de pista (ni una vuelta grabada)","No track line (nor a recorded lap)"));break;}}
+  InterlockedExchange(&ra_menu_request,op);menu_say(op==A_GRADER?TR("La niveladora sale a la pista","The grader is out on the track"):TR("El regador sale a la pista","The water truck is out on the track"));break;
  case A_RESET:case A_SMOOTH:case A_WATER:
   if(!ra_session){menu_say(TR("Primero entra a la pista","Get on the track first"));break;}
   InterlockedExchange(&ra_menu_request,op);menu_say(op==A_RESET?TR("Pista reseteada","Track reset"):op==A_SMOOTH?TR("Pista alisada","Track smoothed"):TR("Pista regada","Track watered"));break;
@@ -397,8 +397,8 @@ API void Draw(int state,int *quads,void **quad_data,int *strings,void **string_d
  if(menu_edge(VK_F8)){menu_open=!menu_open;menu_typing=0;if(menu_open){menu_load();menu_presets_scan();memset(menu_down,1,sizeof(menu_down));menu_down[VK_F8]=1;}}
  if(!menu_open){ /* fork: a small line while a wave / crew job / soaking runs, so nothing changes out of nowhere */
   const LONG kind=ra_job_kind,pct=ra_job_pct;if(!kind||!ra_session)return;menu_nq=menu_ns=0;
-  static const char *const es[6]={"","Reseteando la pista","Alisando la pista","Niveladora en tu linea","Regador en tu linea","La tierra se esta mojando"};
-  static const char *const en[6]={"","Resetting the track","Smoothing the track","Grader on your line","Water truck on your line","The soil is soaking up water"};
+  static const char *const es[6]={"","Reseteando la pista","Alisando la pista","Niveladora en la pista","Regador en la pista","La tierra se esta mojando"};
+  static const char *const en[6]={"","Resetting the track","Smoothing the track","Grader on the track","Water truck on the track","The soil is soaking up water"};
   MenuString *m=menu_text(.03f,.93f,0,0xFFE8E8E8ul);
   if(kind==5)snprintf(m->text,100,"%s...",menu_lang?en[5]:es[5]);else snprintf(m->text,100,"%s  %ld %%",menu_lang?en[kind<6?kind:0]:es[kind<6?kind:0],(long)pct);
   *quads=0;*quad_data=menu_quads;*strings=menu_ns;*string_data=menu_strings;return;}

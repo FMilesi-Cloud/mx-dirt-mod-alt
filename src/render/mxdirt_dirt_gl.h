@@ -29,7 +29,9 @@ typedef struct {
  int solid,sink; /* solid: the ground texture follows the relief; sink: also write the raised layer's depth (the bike sinks into it) */
 } MxDirtSoftInput;
 /* fork: the track crew machine to draw this frame (kind 0 = none): world x/z (metres), unit heading x/z, speed m/s */
-typedef struct {int kind;float x,z,fwd[2],speed;} MxDirtCrewInput;
+/* ground_ok: y (ground under it, the core's metres), slope (dy/dx, dy/dz) and ref (world x, z and the core's y at the
+   rider's bike) are set: beyond the height window the machine stands on that, matched to the window at the bike */
+typedef struct {int kind;float x,z,fwd[2],speed;int ground_ok;float y,slope[2],ref[3],grid[7][3];} MxDirtCrewInput;
 int mxdirt_gl_draw(MxDirtGl *,const MxDirtCameraScope *,const MxDirtWindow *,const MxDirtLook *,const MxDirtState *state,const MxDirtSoftInput *soft,const MxDirtCrewInput *crew);
 /* The draw target seen at the last full state check (FBO name, its sample count)
    and why the last frame was not drawn: 0 drawn, 1 camera changed, 2 transform

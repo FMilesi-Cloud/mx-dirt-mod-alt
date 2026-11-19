@@ -204,7 +204,10 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
  MxDirtCrewInput crew;memset(&crew,0,sizeof(crew));
  if(frame->crew_kind>0&&isfinite(frame->crew_x_m)&&isfinite(frame->crew_z_m)){crew.kind=frame->crew_kind;
   crew.x=frame->origin_m[0]+.5f*frame->span_x_m+frame->crew_x_m;crew.z=frame->origin_m[2]+.5f*frame->span_z_m+frame->crew_z_m;
-  crew.fwd[0]=frame->crew_fwd[0];crew.fwd[1]=frame->crew_fwd[1];crew.speed=frame->crew_speed;}
+  crew.fwd[0]=frame->crew_fwd[0];crew.fwd[1]=frame->crew_fwd[1];crew.speed=frame->crew_speed;
+  if(frame->crew_ground_ok){crew.ground_ok=1;crew.y=frame->crew_y;crew.slope[0]=frame->crew_slope[0];crew.slope[1]=frame->crew_slope[1];
+   memcpy(crew.grid,frame->crew_grid,sizeof(crew.grid));
+   crew.ref[0]=frame->origin_m[0]+.5f*frame->span_x_m+frame->crew_ref[0];crew.ref[1]=frame->origin_m[2]+.5f*frame->span_z_m+frame->crew_ref[1];crew.ref[2]=frame->crew_ref[2];}}
  int result=mxdirt_gl_draw(rc_gl,scope,&window,&rc_look,&state,soft_on?&soft:NULL,&crew);rc_ticks=rc_elapsed(start);
  rc_part[2]=rc_ticks-rc_part[0]-rc_part[1];
  if(rc_ticks>rc_peak){rc_peak=rc_ticks;memcpy(rc_peak_part,rc_part,sizeof(rc_part));}

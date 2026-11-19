@@ -49,5 +49,14 @@ int main(void){
         else assert(e.berm_blows==0&&crest==crest0);
         mxb_soil_sim_destroy(s);
     }
+    /* 3. steering corrections on a straight past a loose berm: the front wheel points left and right, the bike goes
+       straight - no turn, no blowout (the first ride had 2133 from this) */
+    {MxbSoilSim *s=sim();MxdEvents e;memset(&e,0,sizeof(e));e.berm_gain=1.f;
+     for(int r=0;r<(int)s->size;r++)for(int c=0;c<(int)s->size;c++){float X,Z;mxb_ss_world(s,c,r,&X,&Z);if(fabsf(X)<6.f&&Z<-.38f&&Z>-.62f)mxb_ss_add(s,c,r,.15f,1);}
+     for(int k=0;k<200;k++){const float a=.35f*sinf((float)k*.9f),fx=cosf(a),fz=sinf(a);MxdirtContact in[2];
+      contact(in,-5.f+.24f*(float)k*.2f,0.f,12.f,0.f,1.f);contact(in+1,-6.4f+.24f*(float)k*.2f,0.f,12.f,0.f,1.f);
+      in[0].forward[0]=fx;in[0].forward[2]=fz;in[0].lateral[0]=-fz;in[0].lateral[2]=fx; /* the front wheel steers; velocity stays +x */
+      mxd_berm_step(&e,s,in,1.f);}
+     fprintf(stderr,"berm (steering on a straight): blowouts %llu\n",(unsigned long long)e.berm_blows);assert(e.berm_blows==0);mxb_soil_sim_destroy(s);}
     puts("test_events ok");return 0;
 }
