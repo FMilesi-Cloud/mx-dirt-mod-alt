@@ -76,44 +76,61 @@ static void ra_tyres_lookup(const char *bike){
  if(ra_log){fprintf(ra_log,"{\"kind\":\"bike_tyres\",\"bike\":\"%s\",\"set\":\"%s\",\"source\":\"%s\",\"width_m\":[%.3f,%.3f],\"knobs_rear\":%.2f,\"slip_sinkage\":%.2f}\n",
   strchr(bike,'"')?"?":bike,strchr(set,'"')?"?":set,ra_tyre_source,(double)ra_tyre_width[0],(double)ra_tyre_width[1],(double)ra_tyre_knobs_rear,(double)ra_tyre_slip);fflush(ra_log);}
 }
-/* ---- telemetry (MX Bikes plugin API bike data) ---- */
-typedef struct {
- int rpm;float engine_temp,water_temp;int gear;float fuel,speedometer;
- float pos[3],vel[3],acc[3];float rot[3][3];float yaw,pitch,roll,yaw_vel,pitch_vel,roll_vel;
- float susp_length[2],susp_vel[2];int crashed;float steer,input_throttle,throttle,front_brake,rear_brake,clutch;
- float wheel_speed[2];int wheel_material[2];float steer_torque;
-} RaTelemetry;
-_Static_assert(sizeof(RaTelemetry)==184,"MX Bikes telemetry layout");
-static RaTelemetry ra_tel;static volatile LONG ra_tel_size,ra_tel_count;
-static unsigned ra_tel_checked,ra_tel_matched,ra_tel_frames;static int ra_tel_state; /* 0 checking, 1 verified, -1 refused */
+/* ---- telemetry (MX Bikes plugin API bike data) ----
+   The game passes 188 bytes, not the 184 of the layout first assumed: its exact layout is not taken for granted.
+   The record is kept raw (4-byte slots) and the slot pair holding the two wheel materials is found by matching
+   them against the materials the mod reads itself (90 % of 400 samples, no rival slot over half). Brakes and the
+   crash flag sit at fixed distances before it (the tail of the record: crashed, steer, throttle input, throttle,
+   front brake, rear brake, clutch, wheel speed x2, wheel material x2); they are then checked for 200 more samples
+   (brakes 0..1, crash 0/1) before anything is used. Any doubt: telemetry stays off and the log says why. */
+enum { RA_TEL_SLOTS=64, RA_TEL_MIN_BYTES=120 };
+static int32_t ra_tel_raw[RA_TEL_SLOTS];static volatile LONG ra_tel_size,ra_tel_count;
+static unsigned ra_tel_score[RA_TEL_SLOTS],ra_tel_checked,ra_tel_frames,ra_tel_valid;static LONG ra_tel_seen;
+static int ra_tel_state,ra_tel_slot=-1; /* state: 0 finding the layout, 2 validating it, 1 in use, -1 refused */
 static unsigned ra_use_telemetry=1,ra_use_bike_tyres=1;
+static int ra_tel_size_ok(LONG n){return n>=RA_TEL_MIN_BYTES&&n<=(LONG)sizeof(ra_tel_raw)&&!(n&3);}
 static void ra_telemetry_in(const void *data,int size){
  InterlockedExchange(&ra_tel_size,size);
- if(data&&size==(int)sizeof(RaTelemetry)){memcpy(&ra_tel,data,sizeof(ra_tel));InterlockedIncrement(&ra_tel_count);}
+ if(data&&ra_tel_size_ok(size)){memcpy(ra_tel_raw,data,(size_t)size);InterlockedIncrement(&ra_tel_count);}
 }
-/* owner, every completed frame: verify the layout once per track, then hand the brake inputs to the session.
-   Returns 1 when the bike is down (no tyre wear from a bike sliding on its side). */
+static float ra_tel_f(int slot){float f;memcpy(&f,&ra_tel_raw[slot],4);return f;}
+static void ra_tel_log(const char *used,const char *reason){
+ if(!ra_log)return;
+ fprintf(ra_log,"{\"kind\":\"telemetry\",\"used\":%s,\"reason\":\"%s\",\"bytes\":%ld,\"calls\":%ld,\"checked\":%u,\"material_slot\":%d,\"mod_material\":[%d,%d],\"slots\":[",
+  used,reason,(long)ra_tel_size,(long)ra_tel_count,ra_tel_checked,ra_tel_slot,ra_meta[0].material,ra_meta[1].material);
+ const int n=ra_tel_size_ok(ra_tel_size)?(int)(ra_tel_size/4):0;
+ for(int k=0;k<n;k++)fprintf(ra_log,"%s[%d,%.4g]",k?",":"",ra_tel_raw[k],(double)ra_tel_f(k)); /* int and float view of every slot */
+ fprintf(ra_log,"]}\n");
+}
+/* owner, every completed frame: find and check the layout once per track, then hand the brake inputs to the
+   session. Returns 1 when the bike is down (no tyre wear from a bike sliding on its side). */
 static int ra_telemetry_frame(void){
  float brake[2]={0,0};int crashed=0;
- /* still undecided after ~1 min of riding: say why, with what the game sends, and stop checking */
- if(ra_use_telemetry&&ra_tel_state==0&&++ra_tel_frames==4000){ra_tel_state=-1;
-  if(ra_log)fprintf(ra_log,"{\"kind\":\"telemetry\",\"used\":false,\"reason\":\"%s\",\"bytes\":%ld,\"expected_bytes\":%u,\"calls\":%ld,\"checked\":%u,\"matched\":%u,\"tel_material\":[%d,%d],\"mod_material\":[%d,%d]}\n",
-   !ra_tel_count?"no_data":ra_tel_size!=(LONG)sizeof(RaTelemetry)?"size":"materials",(long)ra_tel_size,(unsigned)sizeof(RaTelemetry),(long)ra_tel_count,ra_tel_checked,ra_tel_matched,
-   ra_tel.wheel_material[0],ra_tel.wheel_material[1],ra_meta[0].material,ra_meta[1].material);}
- if(ra_use_telemetry&&ra_tel_state>=0&&ra_tel_count&&ra_tel_size==(LONG)sizeof(RaTelemetry)){
-  const RaTelemetry t=ra_tel;
-  if(ra_tel_state==0){
-   for(int w=0;w<2;w++)if(ra_meta[w].availability.normal_contact&&t.wheel_material[w]>0){ra_tel_checked++;ra_tel_matched+=t.wheel_material[w]==ra_meta[w].material;}
-   if(ra_tel_checked>=400){ra_tel_state=ra_tel_matched*10>=ra_tel_checked*9?1:-1;
-    if(ra_log)fprintf(ra_log,"{\"kind\":\"telemetry\",\"bytes\":%ld,\"checked\":%u,\"matched\":%u,\"used\":%s}\n",(long)ra_tel_size,ra_tel_checked,ra_tel_matched,ra_tel_state>0?"true":"false");}}
-  if(ra_tel_state>0){
-   brake[0]=isfinite(t.front_brake)?t.front_brake:0.f;brake[1]=isfinite(t.rear_brake)?t.rear_brake:0.f;crashed=t.crashed!=0;}
+ if(!ra_use_telemetry||ra_tel_state<0){if(ra_session)mxdirt_session_set_inputs(ra_session,brake);return 0;}
+ const LONG count=ra_tel_count,size=ra_tel_size;const int fresh=count!=ra_tel_seen;ra_tel_seen=count;
+ const int n=ra_tel_size_ok(size)?(int)(size/4):0;
+ if(ra_tel_state==0&&++ra_tel_frames==4000){ra_tel_state=-1;ra_tel_log("false",!count?(size?"size":"no_data"):"materials");}
+ if(ra_tel_state==0&&fresh&&n&&ra_meta[0].availability.normal_contact&&ra_meta[1].availability.normal_contact&&ra_meta[0].material>0&&ra_meta[1].material>0){
+  ra_tel_checked++;
+  for(int k=9;k+1<n;k++)if(ra_tel_raw[k]==ra_meta[0].material&&ra_tel_raw[k+1]==ra_meta[1].material)ra_tel_score[k]++;
+  if(ra_tel_checked>=400){int best=-1;unsigned b1=0,b2=0;
+   for(int k=0;k<n;k++){if(ra_tel_score[k]>b1){b2=b1;b1=ra_tel_score[k];best=k;}else if(ra_tel_score[k]>b2)b2=ra_tel_score[k];}
+   if(best>=9&&b1*10>=ra_tel_checked*9&&b2*2<ra_tel_checked){ra_tel_slot=best;ra_tel_state=2;}
+   else{ra_tel_state=-1;ra_tel_log("false","materials");}}
  }
+ if(ra_tel_state>=1&&fresh&&ra_tel_slot>=9&&ra_tel_slot+1<n){
+  const float fb=ra_tel_f(ra_tel_slot-5),rb=ra_tel_f(ra_tel_slot-4);const int32_t cr=ra_tel_raw[ra_tel_slot-9];
+  const int plausible=isfinite(fb)&&isfinite(rb)&&fb>=-.001f&&fb<=1.001f&&rb>=-.001f&&rb<=1.001f&&(cr==0||cr==1);
+  if(!plausible){ra_tel_state=-1;ra_tel_log("false","layout");}
+  else if(ra_tel_state==2&&++ra_tel_valid>=200){ra_tel_state=1;ra_tel_log("true","ok");}
+ }
+ if(ra_tel_state==1&&ra_tel_slot>=9&&ra_tel_slot+1<n){
+  brake[0]=fminf(1.f,fmaxf(0.f,ra_tel_f(ra_tel_slot-5)));brake[1]=fminf(1.f,fmaxf(0.f,ra_tel_f(ra_tel_slot-4)));crashed=ra_tel_raw[ra_tel_slot-9]==1;}
  if(ra_session)mxdirt_session_set_inputs(ra_session,brake);
  return crashed;
 }
 static int ra_tyre_mem_done;
-static void ra_telemetry_track(void){ra_tel_checked=ra_tel_matched=ra_tel_frames=0;ra_tel_state=0;ra_tyre_mem_done=0;}
+static void ra_telemetry_track(void){ra_tel_checked=ra_tel_frames=ra_tel_valid=0;ra_tel_state=0;ra_tel_seen=0;ra_tel_slot=-1;memset(ra_tel_score,0,sizeof(ra_tel_score));ra_tyre_mem_done=0;}
 /* ---- tyre width from the game's own wheel definition (packed bikes, e.g. the OEM ones) ----
    The mod already reads the wheel radius at definition+0xa0 (double). A .tyre lists Radius, TorusRadius, Width,
    so the profile most likely follows: torus (double, m) at +0xa8, width (double, mm) at +0xb0. Used only when both
