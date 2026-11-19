@@ -14,7 +14,7 @@
 #include <string.h>
 #include <wchar.h>
 static DWORD rc_thread;
-static int rc_started,rc_live,rc_retire,rc_fault;
+static int rc_started,rc_live,rc_retire,rc_fault;static double rc_gpu_last; /* fork: for the core menu */
 static int rc_dirt,rc_dirt_fault,rc_soft=1,rc_soft_live,rc_soft_solid=1,rc_tyre_sink=1;
 static MxDirt *rc_cpu;static MxDirtGl *rc_gl;static MxDirtLook rc_look;
 static uint64_t rc_serial,rc_peak,rc_ticks,rc_recentres,rc_frames,rc_skips,rc_generation;
@@ -230,7 +230,7 @@ int mxdirt_content_draw(const MxDirtCameraScope *scope,const MxDirtTsTerrain *te
     (unsigned long long)rc_frames,gap_ms,rc_ticks*rc_ms_per_tick,rc_recentred,rc_stats.changed,(unsigned long long)frame.sim_steps,(double)rc_cam[0],(double)rc_cam[2]);}}}
  int dirt_result=rc_draw_dirt(&frame,scope,terrain);
  rc_frames++;result=dirt_result>0?1:dirt_result;
- {double g=0;if(rc_gl&&mxdirt_gl_gpu(rc_gl,&g,NULL,NULL)){rc_gpu_sum+=g;rc_gpu_n++;if(g>rc_gpu_peak)rc_gpu_peak=g;}}
+ {double g=0;if(rc_gl&&mxdirt_gl_gpu(rc_gl,&g,NULL,NULL)){rc_gpu_last=g;rc_gpu_sum+=g;rc_gpu_n++;if(g>rc_gpu_peak)rc_gpu_peak=g;}}
  if(rc_frames<=8||rc_frames%120==0){
   int fbo=0,samples=0,skip=0,vw=0,vh=0;mxdirt_gl_target(rc_gl,&fbo,&samples,&skip);mxdirt_gl_gpu(rc_gl,NULL,&vw,&vh);
   mxdirt_content_note("dirt frame=%llu generation=%llu serial=%llu soft=%d sim_state=%d sim_steps=%llu result=%d stage=%u reads=%u read_bytes=%u changed=%u recentres=%llu identity_ms=%.3f dirt_ms=%.3f dirt_max_ms=%.3f content_ms=%.3f fbo=%d samples=%d skip=%d gap_max_ms=%.1f gap20=%u gap33=%u gpu_ms=%.3f gpu_max_ms=%.3f gpu_n=%u cam=%.0f,%.0f vp=%dx%d worst_update_ms=%.3f worst_state_ms=%.3f worst_gl_ms=%.3f",
@@ -251,3 +251,5 @@ void mxdirt_content_lifecycle(uint32_t event,uint64_t generation){
  if(event==MXDIRT_SHUTDOWN&&rc_log){fclose(rc_log);rc_log=NULL;}
 end:SetLastError(error);
 }
+/* fork: last GPU ms of the pass and frames drawn, for the core plugin's menu */
+void mxdirt_content_stats(double out[2]){out[0]=rc_gpu_last;out[1]=(double)rc_frames;}

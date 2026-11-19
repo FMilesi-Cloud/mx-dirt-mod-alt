@@ -29,7 +29,10 @@ enum { GRID_VERTICES=(MXDIRT_CELLS+1)*(MXDIRT_CELLS+1), GRID_INDICES=MXDIRT_CELL
 /* Texture units: 0 heights, 1 native colour snapshot, 2 clods, 3 sim state, 4 soft layer, 5 soft tile occupancy. */
 enum { UNITS=6 };
 /* Soft layer window: SOFT_SIDE^2 texels in SOFT_SLOTS^2 tile slots, slot = tile index mod SOFT_SLOTS. */
-enum { SOFT_TILE=32,SOFT_SLOTS=64,SOFT_SIDE=SOFT_TILE*SOFT_SLOTS };
+/* fork: 128 slots (102 m) instead of 64 (51 m): the loose layer no longer pops in ~35 m ahead. Keep in step with
+   MXDIRT_SOFT_SIDE / MXDIRT_SOFT_SLOT_MASK in mxdirt_dirt_shader.h. */
+enum { SOFT_TILE=32,SOFT_SLOTS=128,SOFT_SIDE=SOFT_TILE*SOFT_SLOTS };
+_Static_assert(SOFT_SIDE==MXDIRT_SOFT_SIDE&&SOFT_SLOTS-1==MXDIRT_SOFT_SLOT_MASK,"soft window size");
 enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,
  U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_SOFT_OCC,U_SOFT_TILE,U_SHIFT,U_RELIEF,U_RAMP,U_SOFT_LIFT,U_COUNT };
 static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on",
@@ -216,9 +219,9 @@ static int upload(int *ready,GLint internal,GLenum format,GLenum type,const void
 static unsigned char soft_neutral[SOFT_TILE*SOFT_TILE*2];
 static void soft_update(MxDirtGl *p,const MxDirtSoftInput *s,const float *modelview,const float camera[3],float out[4]){
  if(soft_neutral[0]!=128)for(int i=0;i<SOFT_TILE*SOFT_TILE;i++){soft_neutral[2*i]=128;soft_neutral[2*i+1]=0;}
- /* window centred ~10 m ahead of the camera: forward is eye -Z in world */
+/* fork: window centred ~25 m ahead of the camera (reaches ~76 m ahead, ~26 m behind): forward is eye -Z in world */
  float fx=-modelview[2],fz=-modelview[10],fl=hypotf(fx,fz),cx=camera[0]-s->origin_x,cz=camera[2]-s->origin_z;
- if(fl>1e-3f){cx+=fx/fl*10.f;cz+=fz/fl*10.f;}
+ if(fl>1e-3f){cx+=fx/fl*25.f;cz+=fz/fl*25.f;}
  const float tile_m=s->cell*SOFT_TILE;
  const int32_t tx0=(int32_t)floorf(cx/tile_m)-SOFT_SLOTS/2,tz0=(int32_t)floorf(cz/tile_m)-SOFT_SLOTS/2;
  for(int j=0;j<SOFT_SLOTS;j++)for(int i=0;i<SOFT_SLOTS;i++){

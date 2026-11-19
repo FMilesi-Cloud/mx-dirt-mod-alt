@@ -38,6 +38,8 @@
    perf: the colour program never mentions gl_FragDepth, so hidden fragments
    (ground behind a jump, behind a bike or a building) are rejected by the
    depth test before the shader runs. */
+#define MXDIRT_SOFT_SIDE 4096 /* fork: soft window texels (SOFT_SIDE in mxdirt_dirt_gl.c) */
+#define MXDIRT_SOFT_SLOT_MASK 127
 #ifndef MXDIRT_SOFT_FADE_AREA
 #define MXDIRT_SOFT_FADE_AREA 1
 #endif
@@ -80,7 +82,7 @@ static const char mxdirt_fragment_body[]=
  "const float SIDE=float(" MXDIRT_STR(MXDIRT_SIDE) ");"
  "vec2 H(vec2 c){return texture(heights,(c+shift)/SIDE).rg*height_scale;}"
  /* soft top layer height (m, relative to the untouched layer top) at a local point; the window wraps every 2048 texels */
- "float SH(vec2 l){return (texture(soft,l/(soft_cell*2048.)).r*255.-128.)*soft_unit;}"
+ "float SH(vec2 l){return (texture(soft,l/(soft_cell*float(" MXDIRT_STR(MXDIRT_SOFT_SIDE) "))).r*255.-128.)*soft_unit;}"
  /* knob blocks of a tread pressed along f: rows every 5.2 cm, 3 cm blocks across, staggered */
  "float kblock(vec2 q,vec2 f,vec2 n){float b=floor(dot(q,n)/.03),s=dot(q,f)/.052+.5*mod(b,2.),c=fract(dot(q,n)/.03);"
  "return smoothstep(.3,.18,abs(fract(s)-.5))*smoothstep(.47,.36,abs(c-.5));}"
@@ -129,9 +131,9 @@ static const char mxdirt_fragment_body[]=
  "));s_q=sl;"
  "if(s_vis>.01){vec3 Vs=normalize(camera-w);vec2 dv=Vs.xz/max(Vs.y,.2);float so=.6*soft_depth*soft_lift,top=so+min(127.*soft_unit,soft_depth*1.7),bot=so-min(127.*soft_unit,soft_depth*2.);"
  "float yh=so;"
- "if(texelFetch(soft_occ,ivec2(floor((sl+dv*(.5*(top+so)-(top-bot)/32.))/soft_tile))&ivec2(63),0).r>0.){"
+ "if(texelFetch(soft_occ,ivec2(floor((sl+dv*(.5*(top+so)-(top-bot)/32.))/soft_tile))&ivec2(" MXDIRT_STR(MXDIRT_SOFT_SLOT_MASK) "),0).r>0.){"
  "float yp=top,hp=SH(sl+dv*top)+so;yh=bot;"
- "for(int i=1;i<=16;i++){float y=mix(top,bot,float(i)/16.),h=SH(sl+dv*y)+so;if(h>=y){float t=(yp-hp)/max((yp-hp)-(y-h),1e-6);yh=mix(yp,y,clamp(t,0.,1.));break;}yp=y;hp=h;}}"
+ "int ns=s_vis>.5?16:8;" /* fork: half the march where the relief is already fading out */ "for(int i=1;i<=ns;i++){float y=mix(top,bot,float(i)/float(ns)),h=SH(sl+dv*y)+so;if(h>=y){float t=(yp-hp)/max((yp-hp)-(y-h),1e-6);yh=mix(yp,y,clamp(t,0.,1.));break;}yp=y;hp=h;}}"
  "s_up=yh*s_vis;vec2 sh=dv*s_up;s_q=sl+sh;"
  "\n#ifdef SINK\n"
  "if(s_up<.004)discard;vec4 c=projection*view*vec4(w+Vs*(s_up/max(Vs.y,.2)),1.);gl_FragDepth=clamp(c.z/max(c.w,1e-4)*.5+.5,0.,1.);color=vec4(0.);return;}}"
@@ -229,7 +231,7 @@ static const char mxdirt_fragment_body[]=
  "float s_h=0.,s_press=0.,s_lip=0.,s_shade=1.,s_cav=0.,s_lay=0.,s_new=0.,s_touch=0.;"
  "if(soft_on!=0){s_lay=1.-green;"
  /* everything read below lies within one tile of the middle of the sun-shadow stretch: clear there = flat, untouched layer */
- "if(s_vis>.01&&texelFetch(soft_occ,ivec2(floor((s_q+L.xz/max(L.y,.12)*.044)/soft_tile))&ivec2(63),0).r>0.){"
+ "if(s_vis>.01&&texelFetch(soft_occ,ivec2(floor((s_q+L.xz/max(L.y,.12)*.044)/soft_tile))&ivec2(" MXDIRT_STR(MXDIRT_SOFT_SLOT_MASK) "),0).r>0.){"
  "vec2 q=s_q;float c=soft_cell;s_h=SH(q);"
  "vec2 sg=vec2(SH(q+vec2(c,0))-SH(q-vec2(c,0)),SH(q+vec2(0,c))-SH(q-vec2(0,c)))/(2.*c);"
  "s_cav=(SH(q+vec2(2.5*c,0))+SH(q-vec2(2.5*c,0))+SH(q+vec2(0,2.5*c))+SH(q-vec2(0,2.5*c)))*.25-s_h;"
@@ -239,10 +241,10 @@ static const char mxdirt_fragment_body[]=
  "for(int i=1;i<=8;i++){float d=.011*float(i);occ=max(occ,clamp((SH(q+sd*d)-s_h-d)/.005,0.,1.)*(1.-float(i)/10.));}s_shade=1.-.42*occ;}"
  "s_press=smoothstep(.2,.65,-s_h/soft_depth);s_lip=smoothstep(.001,.007,s_h);"
  /* fresh tread: knob blocks pressed into the trench floor along the last tyre's travel */
- "float tg=texelFetch(soft,ivec2(floor(q/c))&ivec2(2047),0).g*255.;vec2 kg=vec2(0);"
+ "float tg=texelFetch(soft,ivec2(floor(q/c))&ivec2(" MXDIRT_STR(MXDIRT_SOFT_SIDE) "-1),0).g*255.;vec2 kg=vec2(0);"
  /* freshness 0..1 of the soil here (bilinear over the four nearest texels' 2-bit age) */
  "{vec2 fq=q/c-.5;ivec2 f0=ivec2(floor(fq));vec2 ff=fq-vec2(f0);float a4[4];"
- "for(int i=0;i<4;i++)a4[i]=floor(mod(texelFetch(soft,(f0+ivec2(i&1,i>>1))&ivec2(2047),0).g*255.+.5,128.)/32.);"
+ "for(int i=0;i<4;i++)a4[i]=floor(mod(texelFetch(soft,(f0+ivec2(i&1,i>>1))&ivec2(" MXDIRT_STR(MXDIRT_SOFT_SIDE) "-1),0).g*255.+.5,128.)/32.);"
  "s_new=mix(mix(a4[0],a4[1],ff.x),mix(a4[2],a4[3],ff.x),ff.y)/3.;}"
  "if(tg>127.5&&s_press>.05){float a=mod(tg+.5,32.)/32.*3.14159265;vec2 f=vec2(cos(a),sin(a)),n=vec2(-f.y,f.x);"
  "float k0=kblock(q,f,n),kx=kblock(q+vec2(.003,0),f,n),kz=kblock(q+vec2(0,.003),f,n);"

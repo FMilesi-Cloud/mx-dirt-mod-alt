@@ -38,6 +38,8 @@ try{
     Copy-Item "$Here\plugins\mx_dirt.dlo","$Here\plugins\mx_dirt_render.dlo" $P -Force
     # keep the player's settings on an update
     foreach($n in 'mx_dirt.ini','mx_dirt_render.ini'){ if(-not (Test-Path "$P\$n")){ Copy-Item "$Here\plugins\$n" $P } }
+    # in-game menu data (MX Dirt Mod Alt): the sprite; a font the player put there stays
+    New-Item -ItemType Directory -Force "$P\mx_dirt_data" | Out-Null; Copy-Item "$Here\plugins\mx_dirt_data\*" "$P\mx_dirt_data\" -Force
 
     $L="$P\mx_dirt_launcher"; Backup $L; New-Item -ItemType Directory -Force $L | Out-Null
     Copy-Item "$Here\launcher\*" $L -Recurse -Force

@@ -33,6 +33,8 @@ const int16_t *mxdirt_height_field_base(const MxdirtHeightField *);
 /* Optional vertex-exact publication (no 2x2 blend); before deformation only.
    Destination vertex (x,z) then reads source texel (x-1, 2047-z) on a
    2048-texel/2049-vertex terrain, clamped at the edges. */
+/* fork: replace the reference surface with current*factor (0 = flat track, .5 = halved). */
+int mxdirt_height_field_rebase(MxdirtHeightField *,const int32_t *current,size_t count,float factor);
 int mxdirt_height_field_set_vertex_exact(MxdirtHeightField *,int enabled);
 /* Output is an absolute desired grid, not an additive transaction. Compare with
    acknowledged state to create publication deltas. Buffers must not alias.

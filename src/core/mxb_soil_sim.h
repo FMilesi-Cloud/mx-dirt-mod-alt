@@ -51,6 +51,7 @@ typedef struct {
     float print_fade;     /* v8.2: 0 = full tyre print (the player), 1 = none (gate lines); pre-wear riders leave faint ones */
     float turn;           /* v8.7: 0..1 how hard the bike is turning - corners keep the deep v7.5 ruts the user likes */
     float brake;          /* v9: 0..1 braking / hard-drive share of the bump stress - those rows run widest across the band */
+    float lean;           /* fork: sine of the tyre's lean, + = leaning toward +lat (0 = upright; ghosts and pre-wear riders) */
 } MxbSoilSimWheel;
 /* Per-surface soil behaviour, read from the track's own material layers via the
    tyre contact: sand ruts deep and wide, barely compacts, no cohesion and
@@ -59,6 +60,9 @@ typedef struct {
 /* cmax: how far riding alone can pack each surface (v2: soft soil never turns
    into rock-hard pack; only real hardpack reaches full compaction). */
 #ifndef MXB_SIM_BAND
+#ifndef MXB_SIM_BAND_MIN
+#define MXB_SIM_BAND_MIN .6f /* fork: narrowest band (cells) the grid shows without stair steps */
+#endif
 #define MXB_SIM_BAND .7f /* rut band half-width floor (cells); 1.9: .7 (was 1) - ruts .70 m wide vs Pro .60, were .80 */
 #endif
 typedef struct {uint8_t id;float c0,k,compact,repose_loose,repose_firm,lateral,roost,bump,dust;int sand;float scour,cmax;} MxbSoilMaterial;
@@ -88,6 +92,10 @@ typedef struct {
     float capture;            /* v6: scale on tyres dropping into an existing groove (0 off) */
     float hardpan;            /* v6: m below the built surface where the ripped layer ends and the hard base starts */
     float band;               /* v7: rut band half-width floor, in cells */
+    float slip_sink;          /* fork: the tyre's SlipSinkage: scale on the extra sinkage of a spinning/skidding tyre (1 = as tuned) */
+    float lean_gain;          /* fork: how much a leaned tyre cuts deeper inside and pushes soil outside (0 off, .7 default) */
+    float wall_tan;           /* fork: steepest rut wall the bike meets, tan(angle) (0 = no cap) */
+    float band_m;             /* fork: rut band half-width floor in metres (0 = legacy cells), never under MXB_SIM_BAND_MIN cells */
     float gain_lo,gain_hi;    /* v7.4: range of the bump/chop sinkage modulation (live .75..1.3) */
     float cohesion;           /* v6: scale on damp soil holding steep rut walls (0 off) */
     float clods;              /* v6: scale on roost landing as scattered clods (0 off) */
@@ -133,7 +141,7 @@ typedef struct {
     void *on_deposit_user;
 } MxbSoilSim;
 static inline MxbSoilSimParams mxb_soil_sim_defaults(void){
-    MxbSoilSimParams p;
+    MxbSoilSimParams p;memset(&p,0,sizeof(p)); /* fork: new fields (band_m) start at 0 */
     /* Calibrated for a ~1000 N rear tyre (b=.15 m, R=.33 m). v2 range: freshly
        ripped loam (c~.35) sinks ~5 cm, a ridden-in line (c~.7) ~1.6 cm, full
        hardpack (c=1) ~4 mm. v1's k_packed=1.5e8 left ridden lines ~1 mm: lines
@@ -144,7 +152,7 @@ static inline MxbSoilSimParams mxb_soil_sim_defaults(void){
     p.k_loose=2.3e4f;p.k_packed=2.0e7f;p.compaction0=.35f;p.compact_share=.20f;p.compact_depth=.08f;
     /* firm walls stand to ~50 deg (v5: 60 deg kept sharp rut walls and dug lips standing) */
     p.repose_loose=.67f;p.repose_firm=1.19f;p.roost_gain=.011f;p.churn=.06f;p.dust=.05f;p.depth_scale=1.f;p.moisture=.35f;
-    p.breakdown=1.f;p.drying=1.f;p.sweep=1.f;p.capture=1.f;p.cohesion=1.f;p.clods=1.f;p.hardpan=.20f;p.band=MXB_SIM_BAND;p.gain_lo=.75f;p.gain_hi=1.3f; /* v7: Pro ruts top out ~22 cm and run ~.55 m wide */
+    p.breakdown=1.f;p.drying=1.f;p.sweep=1.f;p.capture=1.f;p.cohesion=1.f;p.clods=1.f;p.hardpan=.20f;p.band=MXB_SIM_BAND;p.lean_gain=.7f;p.slip_sink=1.f;p.gain_lo=.75f;p.gain_hi=1.3f; /* v7: Pro ruts top out ~22 cm and run ~.55 m wide */
     return p;
 }
 static inline void mxb_soil_sim_destroy(MxbSoilSim *s){if(s){free(s->h);free(s->loose);free(s->comp);free(s->mat);free(s->moist_off);free(s->clods);free(s->print);free(s->print_dir);free(s->print_off);free(s->tiles);free(s->base);free(s);}}
@@ -298,7 +306,7 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
        locked/skidding tyre ploughs less than a spinning one. */
     float gain=1.f+(w->gain-1.f)*M.bump; /* braking-bump/soil modulation strength by surface */
     /* bump/chop modulation .75..1.3 (v5: .5..1.5 let bumps feed on themselves within minutes) */
-    z*=((1.f+spin)/(1.f-.5f*spin))*(1.f+.4f*skid)*p->depth_scale*fmaxf(p->gain_lo,fminf(p->gain_hi,gain));
+    z*=(1.f+p->slip_sink*(((1.f+spin)/(1.f-.5f*spin))*(1.f+.4f*skid)-1.f))*p->depth_scale*fmaxf(p->gain_lo,fminf(p->gain_hi,gain));
     /* Scour: hard wheel-hop impacts while braking/driving abrade firm ground even
        where the tyre barely sinks - why hardpack braking zones get beaten into
        bumps. gain-1 carries the load swing (and soil wear) from the host. */
@@ -315,7 +323,7 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
        berms. Vertex-exact publication keeps the same band but cuts it with a
        rounded floor (below): a ~3-cell smooth U, the narrowest groove the grid
        can show without stair-stepping on diagonals (a ~1-cell band did). */
-    float l=2.f*sqrtf(2.f*R*z),A=fmaxf(.06f,.5f*l)+.5f*v*w->dt,B=fmaxf(.5f*b,p->band*s->cell_x);
+    float l=2.f*sqrtf(2.f*R*z),A=fmaxf(.06f,.5f*l)+.5f*v*w->dt,B=fmaxf(.5f*b,p->band_m>0.f?fmaxf(p->band_m,MXB_SIM_BAND_MIN*s->cell_x):p->band*s->cell_x);
     /* floor from the soil the tyre rolls into (front edge, a little ahead) */
     float fx=X+w->fwd[0]*(A+.5f*s->cell_x),fz=Z+w->fwd[1]*(A+.5f*s->cell_x),fc,fr;mxb_ss_texel(s,fx,fz,&fc,&fr);
     int ic=(int)lrintf(fc),ir=(int)lrintf(fr);if(ic<0||ir<0||ic>=(int)s->size||ir>=(int)s->size)return;
@@ -421,6 +429,10 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
        rounded floor an edge cell only ever reaches a partial depth and ruts
        stay smooth at any angle to the grid. */
     const int rounded=s->texel_off>.75f;const float half_w=B+.5f*s->cell_x;
+    /* fork: a leaned tyre rides its inside shoulder: the cut runs deeper on the inside of the turn and
+       shallower on the outside (same band, tilted floor). lsg: + toward +lat, magnitude sin(lean) */
+    const float lsg=p->lean_gain*fmaxf(-.8f,fminf(.8f,w->lean));
+    float lla=hypotf(w->lat[0],w->lat[1]);const float lax=lla>1e-4f?w->lat[0]/lla:0.f,laz=lla>1e-4f?w->lat[1]/lla:0.f;
     int sc=(int)ceilf((A+B)/s->cell_x)+1,sr=(int)ceilf((A+B)/s->cell_z)+1;
     for(int r=r0-sr;r<=r0+sr;r++)for(int q=c0-sc;q<=c0+sc;q++){
         if(q<0||r<0||q>=(int)s->size||r>=(int)s->size)continue;
@@ -433,6 +445,8 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
         if(s->clods[kk])s->clods[kk]=(uint8_t)((float)s->clods[kk]*(1.f-.8f*cov)); /* tyre crushes clods (display only: no dirty mark) */
         float fl=floor_m,wc=cov;
         if(rounded){float t=fabsf(vv)/half_w;if(t>=1.f)continue;fl=surface_m-(surface_m-floor_m)*(1.f-t*t);wc=cu*fminf(1.f,4.f*(1.f-t));}
+        if(lsg!=0.f){const float side_t=fmaxf(-1.f,fminf(1.f,(px*lax+pz*laz)/half_w));
+            fl=surface_m-(surface_m-fl)*fmaxf(.3f,fminf(1.7f,1.f+lsg*side_t));}
         float hm=mxb_ss_m(s,kk),d=(hm-fl)*wc;if(d<=0.f)continue;
         float cq=s->comp[kk]?mxb_ss_c(s,kk):M.c0,Lq=s->loose[kk];
         float share=1.f*p->compact_share*M.compact*(1.f-cq)*(Lq>.002f?1.f:.7f);s->mat[kk]=M.id;
@@ -507,6 +521,8 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
     double moved=cut-compact;
     if(moved>0||swept>0||rowcut>0){
         float side=fmaxf(-1.f,fminf(1.f,w->slip_lat/3.f*M.lateral));
+        /* fork: a leaned tyre shoves its spoil to the outside of the turn (toward -sign(lean) along lat) */
+        side=fmaxf(-1.f,fminf(1.f,side-.8f*p->lean_gain*fmaxf(-1.f,fminf(1.f,w->lean))));
         /* on a face nothing is shoved up onto the lip or dumped just behind: it goes to the sides */
         float front_share=fminf(.6f,.12f+.6f*skid)*(1.f-face),back_share=fminf(.4f,.05f+.4f*spin)*(1.f-face);
         /* v7.8 braking-bump crests: a tyre slamming into a row trough (floor_bias < 0) shoves
@@ -620,7 +636,7 @@ static inline void mxb_soil_sim_relax_region(MxbSoilSim *s,int sweeps,int x0,int
             /* each surface slumps at its own angles (sand: almost no cohesion) */
             unsigned idf=s->mat[dd>0?k:k2]%6u,idl=s->mat[tot>0?k:k2]%6u;
             float lrep_f=loose_rep*rep_loose_id[idf],lrep_l=loose_rep*rep_loose_id[idl];
-            float firm=(lrep_f+(firm_rep*rep_firm_id[idf]-lrep_f)*mxb_ss_c(s,dd>0?k:k2))*coh;if(firm<lrep_f)firm=lrep_f;
+            float firm=(lrep_f+(firm_rep*rep_firm_id[idf]-lrep_f)*mxb_ss_c(s,dd>0?k:k2))*coh;if(s->p.wall_tan>0.f&&firm>s->p.wall_tan)firm=s->p.wall_tan;if(firm<lrep_f)firm=lrep_f;
             /* v6.1: soil piled ABOVE the built surface is spoil - it never stands
                steeper than loose repose, so no pile can grow into a spike. Firm and
                cohesive walls are only the cut walls of ruts. */

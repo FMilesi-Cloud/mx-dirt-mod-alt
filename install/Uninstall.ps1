@@ -23,7 +23,7 @@ try{
     if(Get-Process -Name mxbikes -ErrorAction SilentlyContinue){ throw 'Close MX Bikes first.' }
     $P="$GameDir\plugins"; $B="$([Environment]::GetFolderPath('MyDocuments'))\PiBoSo\MX Bikes\mx_dirt_mod_backups\uninstall-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     New-Item -ItemType Directory -Force $B | Out-Null
-    foreach($n in 'mx_dirt.dlo','mx_dirt_render.dlo','mx_dirt.ini','mx_dirt_render.ini','mx_dirt.jsonl','mx_dirt_render.log','mx_dirt_launcher','mx_dirt_soft','mx_dirt_terrain'){ if(Test-Path "$P\$n"){ Move-Item "$P\$n" $B -Force } }
+    foreach($n in 'mx_dirt.dlo','mx_dirt_render.dlo','mx_dirt.ini','mx_dirt_render.ini','mx_dirt.jsonl','mx_dirt_render.log','mx_dirt_launcher','mx_dirt_soft','mx_dirt_terrain','mx_dirt_data','mx_dirt_presets','mx_dirt_tracks'){ if(Test-Path "$P\$n"){ Move-Item "$P\$n" $B -Force } }
     $lnk="$([Environment]::GetFolderPath('Desktop'))\MX Dirt Mod.lnk"; if(Test-Path $lnk){ Move-Item $lnk $B -Force }
     Say "MX Dirt Mod removed. The game is back to normal.`n`nRemoved files were moved to:`n$B"
 }catch{ Say "Uninstall failed:`n$($_.Exception.Message)"; exit 1 }

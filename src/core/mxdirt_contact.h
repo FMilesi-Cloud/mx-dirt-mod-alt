@@ -49,6 +49,7 @@ typedef struct {
     float slip[3];            /* contact-point velocity, native units/s: [0] lateral,
                                  [1] normal, [2] along the unsigned longitudinal axis */
     float direction;          /* +1/-1: forward = longitudinal*direction */
+    float lean;               /* fork: sine of the wheel's lean to the ground, + = leaning toward +lateral (the inside of the turn) */
     float load_n;             /* filtered normal load, newtons */
     float frame_mean_n;       /* mean raw load of this frame's active samples (0 if none) */
     float frame_slow_n;       /* ~0.6 s running mean of the raw load */
@@ -62,6 +63,7 @@ typedef struct {
     MxdirtContactConfig config;
     float load_n;
     float radius_vector_metres[3], longitudinal[3], lateral[3], contact_velocity_native[3];
+    float lean; /* fork: see MxdirtContact.lean */
     float load_sum_n, load_slow_n;
     uint32_t load_count;
     uint64_t physics_sequence, controller_sequence;

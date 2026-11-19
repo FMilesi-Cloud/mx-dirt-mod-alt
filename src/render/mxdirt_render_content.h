@@ -30,4 +30,6 @@ void mxdirt_content_lifecycle(uint32_t event,uint64_t generation);
 /* One timestamped line in the content log (no-op when content_log is empty).
    Bounded to a few thousand lines per session. */
 void mxdirt_content_note(const char *fmt,...);
+/* fork: [0] GPU ms of the last measured pass, [1] frames drawn this track */
+void mxdirt_content_stats(double out[2]);
 #endif

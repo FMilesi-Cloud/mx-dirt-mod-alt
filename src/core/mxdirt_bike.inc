@@ -1,0 +1,135 @@
+/* fork: what the mod learns about the rider's bike, through official data only.
+   1. Its tyres: <bike>.cfg names a tyre set (tyres { id = X }); X.cfg names each wheel's .tyre file; the .tyre
+      gives TorusRadius (width = 2x), KnobsFactor and SlipSinkage. Read from unpacked folders in the game's
+      bikes\ / tyres\ and in Documents\...\mods\bikes\ / mods\tyres\. Packed (.pkz) bikes keep the defaults.
+   2. Telemetry (RunTelemetry, the plugin API): brake inputs and the crashed flag. The layout is checked twice
+      before use: the size the game passes, and its wheel materials against the ones the mod reads itself. */
+static char ra_save_dir[MAX_PATH]; /* Documents\PiBoSo\MX Bikes\ (Startup's savepath) */
+static char ra_game_dir_override[MAX_PATH]; /* tests only: the game folder when not running inside it */
+static float ra_tyre_width[2],ra_tyre_knobs_rear,ra_tyre_slip;static char ra_tyre_source[16]="default";
+/* key = value lookup inside [from,to): first line whose first word is key (case-insensitive) */
+static int ra_cfg_value(const char *from,const char *to,const char *key,char *out,size_t cap){
+ const size_t kn=strlen(key);
+ for(const char *p=from;p&&p<to;){
+  while(p<to&&(*p==' '||*p=='\t'||*p=='\r'||*p=='\n'))p++;
+  const char *eol=memchr(p,'\n',(size_t)(to-p));if(!eol)eol=to;
+  if((size_t)(eol-p)>kn&&!_strnicmp(p,key,kn)&&(p[kn]==' '||p[kn]=='\t'||p[kn]=='=')){
+   const char *v=memchr(p,'=',(size_t)(eol-p));if(v){v++;while(v<eol&&(*v==' '||*v=='\t'))v++;
+    size_t n=(size_t)(eol-v);while(n&&(v[n-1]=='\r'||v[n-1]==' '||v[n-1]=='\t'))n--;
+    if(n>=cap)n=cap-1;memcpy(out,v,n);out[n]=0;return 1;}}
+  p=eol<to?eol+1:to;
+ }
+ return 0;
+}
+/* the block that follows a line whose first word is name: [start of its '{', end of file) is enough here */
+static const char *ra_cfg_block(const char *buf,const char *end,const char *name){
+ const size_t n=strlen(name);
+ for(const char *p=buf;p<end;){
+  while(p<end&&(*p==' '||*p=='\t'||*p=='\r'||*p=='\n'))p++;
+  if((size_t)(end-p)>n&&!_strnicmp(p,name,n)&&(p[n]=='\r'||p[n]=='\n'||p[n]==' '||p[n]=='\t'||p[n]=='{'))return p+n;
+  const char *eol=memchr(p,'\n',(size_t)(end-p));p=eol?eol+1:end;
+ }
+ return NULL;
+}
+static char *ra_read_text(const char *path,size_t *n){
+ FILE *f=fopen(path,"rb");if(!f)return NULL;char *b=malloc(65537);size_t got=b?fread(b,1,65536,f):0;fclose(f);
+ if(!b||!got){free(b);return NULL;}b[got]=0;*n=got;return b;
+}
+/* roots: game folder and Documents\...\mods */
+static int ra_bike_roots(char roots[2][MAX_PATH]){
+ char exe[MAX_PATH];DWORD n=GetModuleFileNameA(NULL,exe,MAX_PATH);if(!n||n>=MAX_PATH)return 0;
+ char *slash=strrchr(exe,'\\');if(!slash)return 0;slash[1]=0;snprintf(roots[0],MAX_PATH,"%s",ra_game_dir_override[0]?ra_game_dir_override:exe);
+ if(ra_save_dir[0])snprintf(roots[1],MAX_PATH,"%smods\\",ra_save_dir);else roots[1][0]=0;
+ return 1;
+}
+static int ra_tyre_file(const char *path,float *width,float *knobs,float *slip){
+ size_t n;char *b=ra_read_text(path,&n);if(!b)return 0;char v[64];int ok=0;
+ if(ra_cfg_value(b,b+n,"TorusRadius",v,sizeof(v))){float t=strtof(v,NULL);if(t>.02f&&t<.15f){*width=2.f*t;ok=1;}}
+ if(ra_cfg_value(b,b+n,"KnobsFactor",v,sizeof(v)))*knobs=strtof(v,NULL);
+ if(ra_cfg_value(b,b+n,"SlipSinkage",v,sizeof(v)))*slip=strtof(v,NULL);
+ free(b);return ok;
+}
+/* EventInit: find the bike's tyres. Leaves the defaults (0) when anything is missing or packed. */
+static void ra_tyres_lookup(const char *bike){
+ ra_tyre_width[0]=ra_tyre_width[1]=ra_tyre_knobs_rear=ra_tyre_slip=0.f;snprintf(ra_tyre_source,sizeof(ra_tyre_source),"default");
+ char roots[2][MAX_PATH];if(!bike||!bike[0]||strpbrk(bike,"\\/:*?\"<>|")||!ra_bike_roots(roots))return;
+ char set[64]="";
+ for(int r=0;r<2&&!set[0];r++){if(!roots[r][0])continue;
+  char pat[MAX_PATH];if(snprintf(pat,MAX_PATH,"%sbikes\\%s\\*.cfg",roots[r],bike)>=MAX_PATH)continue;
+  WIN32_FIND_DATAA f;HANDLE h=FindFirstFileA(pat,&f);if(h==INVALID_HANDLE_VALUE)continue;
+  do{char p[MAX_PATH];size_t n;if(snprintf(p,MAX_PATH,"%sbikes\\%s\\%s",roots[r],bike,f.cFileName)>=MAX_PATH)continue;
+   char *b=ra_read_text(p,&n);if(!b)continue;const char *t=ra_cfg_block(b,b+n,"tyres");
+   if(t)ra_cfg_value(t,b+n,"id",set,sizeof(set));free(b);}
+  while(!set[0]&&FindNextFileA(h,&f));FindClose(h);}
+ const int set_ok=set[0]&&!strpbrk(set,"\\/:*?\"<>|"); /* no set found: the log line still says so */
+ for(int r=0;r<2&&set_ok;r++){if(!roots[r][0])continue;
+  char cfg[MAX_PATH];size_t n;if(snprintf(cfg,MAX_PATH,"%styres\\%s\\%s.cfg",roots[r],set,set)>=MAX_PATH)continue;
+  char *b=ra_read_text(cfg,&n);if(!b)continue;
+  float width[2]={0,0},knobs[2]={0,0},slip[2]={0,0};int found=0;
+  for(int w=0;w<2;w++){const char *blk=ra_cfg_block(b,b+n,w?"wheel1":"wheel0");char file[96];
+   if(!blk||!ra_cfg_value(blk,b+n,"params",file,sizeof(file))||strpbrk(file,"\\/:*?\"<>|"))continue;
+   char tp[MAX_PATH];if(snprintf(tp,MAX_PATH,"%styres\\%s\\%s",roots[r],set,file)<MAX_PATH&&ra_tyre_file(tp,&width[w],&knobs[w],&slip[w]))found++;}
+  free(b);
+  if(found==2){ra_tyre_width[0]=width[0];ra_tyre_width[1]=width[1];ra_tyre_knobs_rear=knobs[1];ra_tyre_slip=.5f*(slip[0]+slip[1]);
+   snprintf(ra_tyre_source,sizeof(ra_tyre_source),"%s",r?"mods":"game");break;}
+ }
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"bike_tyres\",\"bike\":\"%s\",\"set\":\"%s\",\"source\":\"%s\",\"width_m\":[%.3f,%.3f],\"knobs_rear\":%.2f,\"slip_sinkage\":%.2f}\n",
+  strchr(bike,'"')?"?":bike,strchr(set,'"')?"?":set,ra_tyre_source,(double)ra_tyre_width[0],(double)ra_tyre_width[1],(double)ra_tyre_knobs_rear,(double)ra_tyre_slip);fflush(ra_log);}
+}
+/* ---- telemetry (MX Bikes plugin API bike data) ---- */
+typedef struct {
+ int rpm;float engine_temp,water_temp;int gear;float fuel,speedometer;
+ float pos[3],vel[3],acc[3];float rot[3][3];float yaw,pitch,roll,yaw_vel,pitch_vel,roll_vel;
+ float susp_length[2],susp_vel[2];int crashed;float steer,input_throttle,throttle,front_brake,rear_brake,clutch;
+ float wheel_speed[2];int wheel_material[2];float steer_torque;
+} RaTelemetry;
+_Static_assert(sizeof(RaTelemetry)==184,"MX Bikes telemetry layout");
+static RaTelemetry ra_tel;static volatile LONG ra_tel_size,ra_tel_count;
+static unsigned ra_tel_checked,ra_tel_matched,ra_tel_frames;static int ra_tel_state; /* 0 checking, 1 verified, -1 refused */
+static unsigned ra_use_telemetry=1,ra_use_bike_tyres=1;
+static void ra_telemetry_in(const void *data,int size){
+ InterlockedExchange(&ra_tel_size,size);
+ if(data&&size==(int)sizeof(RaTelemetry)){memcpy(&ra_tel,data,sizeof(ra_tel));InterlockedIncrement(&ra_tel_count);}
+}
+/* owner, every completed frame: verify the layout once per track, then hand the brake inputs to the session.
+   Returns 1 when the bike is down (no tyre wear from a bike sliding on its side). */
+static int ra_telemetry_frame(void){
+ float brake[2]={0,0};int crashed=0;
+ /* still undecided after ~1 min of riding: say why, with what the game sends, and stop checking */
+ if(ra_use_telemetry&&ra_tel_state==0&&++ra_tel_frames==4000){ra_tel_state=-1;
+  if(ra_log)fprintf(ra_log,"{\"kind\":\"telemetry\",\"used\":false,\"reason\":\"%s\",\"bytes\":%ld,\"expected_bytes\":%u,\"calls\":%ld,\"checked\":%u,\"matched\":%u,\"tel_material\":[%d,%d],\"mod_material\":[%d,%d]}\n",
+   !ra_tel_count?"no_data":ra_tel_size!=(LONG)sizeof(RaTelemetry)?"size":"materials",(long)ra_tel_size,(unsigned)sizeof(RaTelemetry),(long)ra_tel_count,ra_tel_checked,ra_tel_matched,
+   ra_tel.wheel_material[0],ra_tel.wheel_material[1],ra_meta[0].material,ra_meta[1].material);}
+ if(ra_use_telemetry&&ra_tel_state>=0&&ra_tel_count&&ra_tel_size==(LONG)sizeof(RaTelemetry)){
+  const RaTelemetry t=ra_tel;
+  if(ra_tel_state==0){
+   for(int w=0;w<2;w++)if(ra_meta[w].availability.normal_contact&&t.wheel_material[w]>0){ra_tel_checked++;ra_tel_matched+=t.wheel_material[w]==ra_meta[w].material;}
+   if(ra_tel_checked>=400){ra_tel_state=ra_tel_matched*10>=ra_tel_checked*9?1:-1;
+    if(ra_log)fprintf(ra_log,"{\"kind\":\"telemetry\",\"bytes\":%ld,\"checked\":%u,\"matched\":%u,\"used\":%s}\n",(long)ra_tel_size,ra_tel_checked,ra_tel_matched,ra_tel_state>0?"true":"false");}}
+  if(ra_tel_state>0){
+   brake[0]=isfinite(t.front_brake)?t.front_brake:0.f;brake[1]=isfinite(t.rear_brake)?t.rear_brake:0.f;crashed=t.crashed!=0;}
+ }
+ if(ra_session)mxdirt_session_set_inputs(ra_session,brake);
+ return crashed;
+}
+static int ra_tyre_mem_done;
+static void ra_telemetry_track(void){ra_tel_checked=ra_tel_matched=ra_tel_frames=0;ra_tel_state=0;ra_tyre_mem_done=0;}
+/* ---- tyre width from the game's own wheel definition (packed bikes, e.g. the OEM ones) ----
+   The mod already reads the wheel radius at definition+0xa0 (double). A .tyre lists Radius, TorusRadius, Width,
+   so the profile most likely follows: torus (double, m) at +0xa8, width (double, mm) at +0xb0. Used only when both
+   fit that pattern; the raw doubles around them are logged once per track ("wheel_definition") to confirm it. */
+static void ra_tyre_from_memory(void){
+ if(ra_tyre_mem_done||!ra_session||!ra_use_bike_tyres||strcmp(ra_tyre_source,"default"))return;
+ if(!ra_meta[0].definition||!ra_meta[1].definition)return;
+ ra_tyre_mem_done=1;double d[2][12];float width[2]={0,0};int fit=0;
+ for(int w=0;w<2;w++){
+  if(!ra_read(NULL,ra_meta[w].definition+0x90,d[w],sizeof(d[w]))){memset(d[w],0,sizeof(d[w]));continue;}
+  const double radius=d[w][2],torus=d[w][3],mm=d[w][4]; /* +0xa0, +0xa8, +0xb0 */
+  if(radius>.2&&radius<.6&&torus>.03&&torus<.12&&torus<.4*radius&&mm>=40.&&mm<=120.){width[w]=(float)(2.*torus);fit++;}
+ }
+ if(fit==2&&mxdirt_session_set_tyres(ra_session,width,0.f,0.f))snprintf(ra_tyre_source,sizeof(ra_tyre_source),"memory");
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"wheel_definition\",\"from_offset\":\"0x90\",\"front\":[");
+  for(int k=0;k<12;k++)fprintf(ra_log,"%s%.6g",k?",":"",d[0][k]);fprintf(ra_log,"],\"rear\":[");
+  for(int k=0;k<12;k++)fprintf(ra_log,"%s%.6g",k?",":"",d[1][k]);
+  fprintf(ra_log,"],\"used\":%s,\"width_m\":[%.3f,%.3f]}\n",fit==2?"true":"false",(double)width[0],(double)width[1]);}
+}

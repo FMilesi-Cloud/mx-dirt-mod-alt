@@ -90,6 +90,7 @@ static unsigned ra_batch_tiles=4,ra_send_interval=0;
 static unsigned ra_online_wear=0,ra_online_echo=0;static int ra_online;
 /* sharp_ruts (vertex-exact publication) is opt-in: the native mesh's fixed
    triangle split turns narrow ruts running along one diagonal into teeth. */
+static unsigned ra_rut_width_cm=36,ra_wall_angle_deg=40,ra_lean_erosion=100;static volatile DWORD ra_render_tick;
 static unsigned ra_sharp_ruts=0,ra_capture_percent=100,ra_cohesion_percent=100,ra_clods_percent=100;static int ra_sharp_live;
 /* Pre-wear gate (0 = off): virtual riders on the recorded laps before the first step. */
 static unsigned ra_prewear_riders=50,ra_prewear_spread_cm=140,ra_prewear_clip_cm=400,ra_prewear_fresh_only=1;
@@ -138,6 +139,16 @@ static int ra_read(void *,uint64_t,void *,size_t);
    sit at exe+E55C14. */
 #define RA_GAME_DEFORMATION_RVA 0xe55bfcu
 #define RA_GAME_TRACK_CONDITIONS_RVA 0xe55c14u
+/* fork: the six 4-byte fields between the deformation scale and the track conditions follow the order of the
+   testing settings in profile.ini (weather_realistic, weather_conditions, temperature, wind_direction,
+   wind_speed). Inferred, not proven: logged raw at every track load ("game_weather") until confirmed. */
+#define RA_GAME_WEATHER_RVA 0xe55c04u
+static int ra_game_weather(int *weather,float *track){
+ int w=-1;float t=-1.f;
+ if(!ra_image||RA_GAME_TRACK_CONDITIONS_RVA+4>ra_image_size)return 0;
+ if(!ra_read(NULL,(uint64_t)(uintptr_t)ra_image+RA_GAME_WEATHER_RVA,&w,4)||!ra_read(NULL,(uint64_t)(uintptr_t)ra_image+RA_GAME_TRACK_CONDITIONS_RVA,&t,4))return 0;
+ if(weather)*weather=w;if(track)*track=isfinite(t)?t:-1.f;return 1;
+}
 static unsigned ra_follow_game_deformation=1,ra_game_deformation_reference=25;
 static float ra_game_factor=1.f; /* this session's Deformation slider factor (1 at the reference), also scales the soft layer */
 static int ra_game_deform_off;
@@ -215,6 +226,9 @@ static float ra_game_depth(void){
    factor=sqrtf(scale/ref);if(factor>3.f)factor=3.f;
    depth*=factor;if(depth<10.f)depth=10.f;if(depth>300.f)depth=300.f;ra_game_factor=factor;}
  }
+ if(ra_log&&ra_image){uint32_t raw[7];if(ra_read(NULL,(uint64_t)(uintptr_t)ra_image+RA_GAME_DEFORMATION_RVA,raw,sizeof(raw))){float fv[7];memcpy(fv,raw,sizeof(fv));
+  fprintf(ra_log,"{\"kind\":\"game_weather\",\"note\":\"deformation,realistic?,weather?,temperature?,wind_dir?,wind_speed?,track_conditions\",\"int\":[%d,%d,%d,%d,%d,%d,%d],\"float\":[%.4g,%.4g,%.4g,%.4g,%.4g,%.4g,%.4g]}\n",
+   (int)raw[0],(int)raw[1],(int)raw[2],(int)raw[3],(int)raw[4],(int)raw[5],(int)raw[6],fv[0],fv[1],fv[2],fv[3],fv[4],fv[5],fv[6]);}}
  if(ra_log){fprintf(ra_log,"{\"kind\":\"game_deformation\",\"follow\":%u,\"read\":%s,\"scale\":%.6g,\"slider_percent\":%.4g,\"reference_percent\":%u,\"factor\":%.6g,\"ini_depth_percent\":%u,\"effective_depth_percent\":%.6g,\"deformation_off\":%s,\"track_conditions\":%.6g}\n",
   ra_follow_game_deformation,have?"true":"false",(double)scale,have?(double)(scale<=1.f?scale*100.f:100.f+(scale-1.f)*100.f/19.f):-1.0,ra_game_deformation_reference,(double)factor,ra_dirt_sim_depth,(double)depth,ra_game_deform_off?"true":"false",(double)cond);fflush(ra_log);}
  return depth;
@@ -491,6 +505,7 @@ static void ra_soft_setup(uint64_t saved_wear){
  MxdirtSoftView v;memset(&v,0,sizeof(v));mxdirt_session_soft_view(ra_session,&v);
  if(ra_log){fprintf(ra_log,"{\"kind\":\"soft_layer\",\"ok\":1,\"thickness_mm\":%u,\"scaled_mm\":%.1f,\"loaded\":%d,\"tiles\":%u}\n",ra_soft_mm,(double)(t*1000.f),loaded,v.allocated);fflush(ra_log);}
 }
+#include "mxdirt_bike.inc"
 static int ra_setup(void) {
  if(ra_session)return 1;
  if(ra_setup_attempted||!ra_engine_gap())return 0;
@@ -525,6 +540,12 @@ static int ra_setup(void) {
     !mxdirt_session_set_extra_riders(ra_session,ra_extra_riders)||!mxdirt_session_set_live_gate(ra_session,ra_live_gate)||!mxdirt_session_set_live_wear(ra_session,(float)ra_live_wear)){
   ra_solver_destroy();goto end;
  }
+ stage="rut_width";
+ {float rw[3];if(!mxdirt_session_set_rut_width(ra_session,(float)ra_rut_width_cm,rw)||!mxdirt_session_set_wall_angle(ra_session,(float)ra_wall_angle_deg)||!mxdirt_session_set_lean_erosion(ra_session,(float)ra_lean_erosion)||
+   (ra_use_bike_tyres&&!mxdirt_session_set_tyres(ra_session,ra_tyre_width,ra_tyre_knobs_rear,ra_tyre_slip))){ra_solver_destroy();goto end;}
+  if(ra_log){fprintf(ra_log,"{\"kind\":\"rut_width\",\"track\":\"%s\",\"grid\":%u,\"cell_cm\":%.2f,\"rut_width_cm\":%u,\"legacy_band_cm\":%.1f,\"band_cm\":%.1f,\"grid_limited\":%s}\n",
+   ra_event_track,ra_geom_valid?ra_geom.width:0u,100.f*rw[0],ra_rut_width_cm,100.f*rw[1],100.f*rw[2],
+   ra_rut_width_cm&&rw[2]>.0101f*ra_rut_width_cm?"true":"false");fflush(ra_log);}}
  stage="grid_changed";
  if(!ra_grid_read(&last)||memcmp(&first,&last,sizeof(first))){ra_solver_destroy();goto end;}
  ra_grid=first;ra_rebind=1;ok=1;
@@ -606,7 +627,20 @@ static int ra_wheel(void *bike,int wheel,float dt) {
  InterlockedDecrement(&ra_inflight);_mm_setcsr(outgoing_csr);SetLastError(outgoing);return result;
 }
 static void ra_settings_live(void);
+/* fork: menu requests (any thread sets, owner runs them here between physics steps): 1 reset, 2 smooth, 3 water */
+static volatile LONG ra_menu_request,ra_menu_moisture;static double ra_last_solver_ms;
+static void ra_menu_ops(void){
+ const LONG op=InterlockedExchange(&ra_menu_request,0);if(!op||!ra_session||ra_online)return;
+ int ok=0;
+ if(op==1||op==2)ok=mxdirt_session_terrain_op(ra_session,(int)op);
+ else if(op==3){MxdirtLiveSettings t;float *f=(float*)&t;for(unsigned k=0;k<sizeof(t)/sizeof(float);k++)f[k]=-1.f;
+  t.moisture_percent=(float)ra_dirt_sim_moisture;ok=mxdirt_session_live_settings(ra_session,&t);}
+ else if(op==4){MxdirtLiveSettings t;float *f=(float*)&t;for(unsigned k=0;k<sizeof(t)/sizeof(float);k++)f[k]=-1.f;
+  LONG m=ra_menu_moisture;t.moisture_percent=(float)(m<0?0:m>100?100:m);ok=mxdirt_session_live_settings(ra_session,&t);}
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"menu_terrain_op\",\"op\":\"%s\",\"ok\":%d}\n",op==1?"reset":op==2?"smooth":op==3?"water":"rain_sync",ok);}
+}
 static void ra_complete_frame(int elapsed) {
+ ra_menu_ops();
  {static unsigned poll;if(!(++poll&63u))ra_settings_live();} /* about twice a second: one file-time query */
  MxbFrameSnapshot f;MxbFrameGate g=ra_gate();int result=mxb_frame_snapshot_finish(&ra_snapshot,&g,&f);
  if(result!=MXB_FRAME_OK&&result!=MXB_FRAME_NO_NEW_STEP){if(result!=MXB_FRAME_WAITING)ra_reject(result);return;}
@@ -624,6 +658,8 @@ static void ra_complete_frame(int elapsed) {
   if(ra_game_deform_off)frames[w].deformation_enabled=0; /* in-game Deformation 0 */
   if(mxb_frame_snapshot_controller_values(&f,w,&frames[w])!=MXB_FRAME_OK){ra_reject(-106);return;}
  }
+ ra_tyre_from_memory(); /* fork: once per track, packed bikes */
+ if(ra_telemetry_frame())frames[0].deformation_enabled=frames[1].deformation_enabled=0; /* fork: a crashed bike leaves no tyre wear */
  MxdirtHeightStats stats;LARGE_INTEGER start,end,freq;
  QueryPerformanceCounter(&start);QueryPerformanceFrequency(&freq);
  const int soil_material[2]={ra_sim_material(ra_meta[0].material),ra_sim_material(ra_meta[1].material)};
@@ -631,7 +667,7 @@ static void ra_complete_frame(int elapsed) {
  if(!mxdirt_session_step(ra_session,frames,soil_material,&stats)){ra_fault(-107);return;}
  if(!ra_online)ra_ghost_record_frame((float)f.dt);
  QueryPerformanceCounter(&end);double ms=(double)(end.QuadPart-start.QuadPart)*1000./freq.QuadPart;
- ra_solver_frames++;ra_solver_total_ms+=ms;if(ms>ra_solver_max_ms)ra_solver_max_ms=ms;
+ ra_last_solver_ms=ms;ra_solver_frames++;ra_solver_total_ms+=ms;if(ms>ra_solver_max_ms)ra_solver_max_ms=ms;
  /* the first frames carry the pre-wear's one big height update; these two say what a ride itself costs */
  if(ra_solver_frames>600){if(ms>2.)ra_solver_slow++;if(ms>ra_solver_late_max_ms)ra_solver_late_max_ms=ms;}
  for(int w=0;w<2;w++)ra_last_position[w]=f.postintegration[w];
@@ -852,6 +888,7 @@ static int ra_prepare_transport(void) {
  InterlockedExchange(&ra_allowed,1);ra_mark(RA_TRANSPORT,1);return 1;
 }
 #include "mxdirt_bootstrap.inc"
+#include "mxdirt_menu.inc"
 /* No SDK callback name alone supplies old_track_retired. The caller must have
    a proven stopped native transport boundary. A failed drain keeps context,
    hooks, gate and session alive, with no return to the competing writer. */
@@ -891,7 +928,7 @@ API int MxDirtBorrowFrame(uint32_t abi,uint32_t bytes,MxDirtFrame *out){
     ra_inflight||ra_outer_depth||ra_close_depth||!ra_event_valid||!ra_allowed||ra_fatal||ra_foreign||
     !ra_session||!ra_geom_valid||!mxdirt_session_state(ra_session,&s)||s.faulted||
     !mxdirt_session_sim_view(ra_session,&v))goto end;
- MxDirtFrame f;memset(&f,0,sizeof(f));
+ MxDirtFrame f;memset(&f,0,sizeof(f));ra_render_tick=GetTickCount(); /* fork: menu status */
  f.abi=MXDIRT_FRAME_ABI;f.bytes=sizeof(f);f.owner_thread=ra_owner;f.reserved=0;f.generation=ra_generation;
  f.grid_width=ra_geom.width;f.grid_height=ra_geom.height;f.span_x_m=ra_geom.span_x;f.span_z_m=ra_geom.span_z;
  memcpy(f.origin_m,ra_geom.origin,sizeof(f.origin_m));
@@ -915,7 +952,7 @@ static const RaSetting ra_settings[]={
  {"soil","breakdown_percent",100,0,300,&ra_breakdown_percent},{"soil","drying_percent",100,0,400,&ra_drying_percent},
  {"soil","sweep_percent",100,0,300,&ra_sweep_percent},{"soil","sharp_ruts",0,0,1,&ra_sharp_ruts},
  {"soil","rut_capture_percent",100,0,300,&ra_capture_percent},{"soil","wall_cohesion_percent",100,0,300,&ra_cohesion_percent},
- {"soil","roost_clods_percent",100,0,300,&ra_clods_percent},{"soil","prewear_riders",50,0,400,&ra_prewear_riders},
+ {"soil","roost_clods_percent",100,0,300,&ra_clods_percent},{"soil","rut_width_cm",36,0,200,&ra_rut_width_cm},{"soil","wall_angle_deg",40,0,85,&ra_wall_angle_deg},{"soil","lean_erosion_percent",100,0,200,&ra_lean_erosion},{"soil","use_telemetry",1,0,1,&ra_use_telemetry},{"soil","use_bike_tyres",1,0,1,&ra_use_bike_tyres},{"soil","prewear_riders",50,0,400,&ra_prewear_riders},
  {"soil","prewear_spread_cm",140,0,500,&ra_prewear_spread_cm},{"soil","prewear_clip_cm",400,0,600,&ra_prewear_clip_cm},
  {"soil","prewear_fresh_only",1,0,1,&ra_prewear_fresh_only},{"soil","soft_layer_mm",85,0,100,&ra_soft_mm},
  {"soil","extra_riders",0,0,15,&ra_extra_riders},{"soil","ghost_riders",0,0,MXDIRT_SESSION_MAX_GHOSTS,&ra_ghost_riders},
@@ -950,7 +987,7 @@ static void ra_settings_live(void){
  if(!ra_ini_changed())return;
  const unsigned depth=ra_dirt_sim_depth,firm=ra_dirt_sim_firmness,moist=ra_dirt_sim_moisture,bumps=ra_bumps_percent,rolling=ra_rolling_bumps_percent,
   hard=ra_hardness_percent,breakdown=ra_breakdown_percent,drying=ra_drying_percent,sweep=ra_sweep_percent,capture=ra_capture_percent,
-  cohesion=ra_cohesion_percent,clods=ra_clods_percent,gate=ra_live_gate,wear=ra_live_wear;
+  cohesion=ra_cohesion_percent,clods=ra_clods_percent,gate=ra_live_gate,wear=ra_live_wear,rutw=ra_rut_width_cm,wall=ra_wall_angle_deg,lean=ra_lean_erosion;
  const int ok=ra_settings_load();int applied=0;
  /* terrain pacing changes nothing in the simulation: live in every session, online too */
  if(ok&&ra_transport)(void)mxb_transport_pacing(ra_transport,ra_batch_tiles,ra_send_interval);
@@ -972,12 +1009,17 @@ static void ra_settings_live(void){
   applied=mxdirt_session_live_settings(ra_session,&t);
   if(gate!=ra_live_gate)applied=mxdirt_session_set_live_gate(ra_session,ra_live_gate)&&applied;
   if(wear!=ra_live_wear)applied=mxdirt_session_set_live_wear(ra_session,(float)ra_live_wear)&&applied;
+  if(rutw!=ra_rut_width_cm)applied=mxdirt_session_set_rut_width(ra_session,(float)ra_rut_width_cm,NULL)&&applied;
+  if(wall!=ra_wall_angle_deg)applied=mxdirt_session_set_wall_angle(ra_session,(float)ra_wall_angle_deg)&&applied;
+  if(lean!=ra_lean_erosion)applied=mxdirt_session_set_lean_erosion(ra_session,(float)ra_lean_erosion)&&applied;
  }
  if(ra_log){fprintf(ra_log,"{\"kind\":\"live_settings\",\"read\":%d,\"session\":%d,\"applied_now\":%d,\"dirt_sim_depth_percent\":%u,\"dirt_sim_firmness_percent\":%u,\"dirt_sim_moisture_percent\":%u,\"braking_bumps_percent\":%u,\"rolling_bumps_percent\":%u,\"live_wear_percent\":%u,\"live_gate_lines\":%u,\"prewear_riders\":%u,\"soft_layer_mm\":%u}\n",
   ok,ra_session?1:0,applied,ra_dirt_sim_depth,ra_dirt_sim_firmness,ra_dirt_sim_moisture,ra_bumps_percent,ra_rolling_bumps_percent,ra_live_wear,ra_live_gate,ra_prewear_riders,ra_soft_mm);fflush(ra_log);}
 }
 API int Startup(char *savepath) {
- (void)savepath;ra_owner=GetCurrentThreadId();ra_image=(unsigned char *)GetModuleHandleW(NULL);
+ ra_owner=GetCurrentThreadId();
+ if(savepath&&savepath[0]){size_t n=strlen(savepath);if(n+2<sizeof(ra_save_dir)){memcpy(ra_save_dir,savepath,n+1);if(savepath[n-1]!='\\'&&savepath[n-1]!='/'){ra_save_dir[n]='\\';ra_save_dir[n+1]=0;}}}
+ ra_image=(unsigned char *)GetModuleHandleW(NULL);
  char path[MAX_PATH],logpath[MAX_PATH];
  DWORD n=GetModuleFileNameA(NULL,path,MAX_PATH);if(!n||n>=MAX_PATH||!ra_hash_file(path,ra_verified_hash)||strcmp(ra_verified_hash,ra_exe_sha))return -1;
  IMAGE_DOS_HEADER dos;IMAGE_NT_HEADERS64 pe;
@@ -1023,6 +1065,8 @@ API void EventInit(void *data,int size) {
  RaEvent e;if(!ra_read(NULL,(uint64_t)(uintptr_t)data,&e,sizeof(e))||(e.type!=1&&!(e.type==2&&ra_online_wear))||
     !memchr(e.trackID,0,sizeof(e.trackID))||!ra_track_select_event(e.trackID))return;
  ra_online=e.type==2;
+ ra_tyres_lookup(e.bikeID);ra_telemetry_track(); /* fork: the bike's own tyres; telemetry is re-verified per track */
+ if(!ra_online)menu_profile_event(ra_event_track); /* fork: this track's profile, before its session is set up */
  ra_flush_first_fault();memset(&ra_first_fault,0,sizeof(ra_first_fault));
  /* Both engine fixes must be in place before any session starts on this track. */
  const char *why="";int patched=mxdirt_patches_install(ra_image,&why);
@@ -1079,7 +1123,7 @@ API __declspec(noinline) void RunStop(void){
  SetLastError(incoming);
 }
 API void RunDeinit(void){RunStop();ra_bootstrap_abort(-10);if(GetCurrentThreadId()==ra_owner&&!ra_inflight&&!ra_bootstrap_remove())ra_fault(-129);}
-API void RunTelemetry(void *data,int size,float time,float pos){(void)data;(void)size;(void)time;(void)pos;}
+API void RunTelemetry(void *data,int size,float time,float pos){(void)time;(void)pos;ra_telemetry_in(data,size);}
 /* Online wear (experimental): where the game says every bike is. Only copied here; the session turns the
    other bikes' tracks into tyre passes on its next step, once the layout of these positions has been
    proven against the local bike (mxdirt_remote.h). */

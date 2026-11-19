@@ -141,6 +141,15 @@ int mxdirt_height_field_set_vertex_exact(MxdirtHeightField *p,int enabled){
     build_lookup(p);
     return 1;
 }
+/* fork: new reference surface (live reset / smooth): initial = round(current * factor), within the cell's bounds.
+   The sim then restarts from its neutral value on top of it. */
+int mxdirt_height_field_rebase(MxdirtHeightField *p,const int32_t *current,size_t count,float factor){
+    if(!p||!current||count<p->cells||!isfinite(factor)||factor<0.f||factor>1.f)return 0;
+    for(size_t k=0;k<p->cells;k++){double v=(double)current[k]*factor;v=v>=0.?floor(v+.5):ceil(v-.5);
+        int32_t lo,hi;mxb_height_fixed_bounds(p->base[k],&lo,&hi);if(p->visual_lower>lo)lo=p->visual_lower;if(p->visual_upper<hi)hi=p->visual_upper;
+        p->initial[k]=v<lo?lo:v>hi?hi:(int32_t)v;}
+    return 1;
+}
 /* target = initial DFM - (sim height - reference) in DFM units, published 1:1
    (the dirt sim sets its own depth limits: hardpan, rut saturation). */
 static int height_target(const MxdirtHeightField *p,size_t k,float e,int32_t *out,int *clipped){

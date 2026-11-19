@@ -45,6 +45,8 @@ struct MxdirtSession {
     struct MxdRemoteMem {float last_x[2],last_z[2],last_floor[2];int has_last[2];} *remote_mem;
     /* Per-stage step timing (QPC ticks): contacts+bumps, dirt sim, height conversion. */
     uint64_t timing_frames,timing_ticks[3],timing_max[3];
+    float tyre_width[2];   /* fork: the bike's own tyre widths, m (0 = class default) */
+    float brake_in[2];     /* fork: rider brake inputs from telemetry, 0..1 (front, rear) */
 };
 static uint64_t qpc_now(void){LARGE_INTEGER t;QueryPerformanceCounter(&t);return (uint64_t)t.QuadPart;}
 static void timing_add(MxdirtSession *s,unsigned k,uint64_t ticks){s->timing_ticks[k]+=ticks;if(ticks>s->timing_max[k])s->timing_max[k]=ticks;}
@@ -224,6 +226,52 @@ int mxdirt_session_set_dirt_shape(MxdirtSession *s,float capture_percent,float c
        !isfinite(cohesion_percent)||cohesion_percent<0.f||cohesion_percent>300.f||
        !isfinite(clods_percent)||clods_percent<0.f||clods_percent>300.f)return 0;
     s->sim->p.capture=capture_percent/100.f;s->sim->p.cohesion=cohesion_percent/100.f;s->sim->p.clods=clods_percent/100.f;return 1;
+}
+/* fork: live terrain operations from the in-game menu (owner thread, between steps).
+   1 reset: every texel back to the untouched track (no deformation, no packing, loose soil, prints, clods),
+   2 smooth: ruts and piles to half their height, loose soil halved, prints and the soft layer cleared (a groomer).
+   The whole grid is handed to the next step through prewear_tiles, the same path pre-wear publishes by. */
+int mxdirt_session_terrain_op(MxdirtSession *s,int op){
+    if(!owned(s)||!s->sim||(op!=1&&op!=2))return 0;
+    MxbSoilSim *m=s->sim;const size_t n=(size_t)m->size*m->size,tn=(size_t)m->tiles_x*m->tiles_y;
+    unsigned char *all=s->prewear_tiles?s->prewear_tiles:malloc(tn);if(!all)return 0;memset(all,1,tn);s->prewear_tiles=all;
+    /* the sim's heights are relative to the surface loaded with the track: move that reference instead */
+    if(!mxdirt_height_field_rebase(s->height,s->target,s->cells,op==1?0.f:.5f))return 0;
+    for(size_t k=0;k<n;k++)m->h[k]=m->ref;
+    if(op==1){memset(m->comp,0,n);memset(m->mat,0,n);memset(m->moist_off,0,n);}
+    for(size_t k=0;k<n;k++)m->loose[k]=op==1?0.f:.5f*m->loose[k];
+    memset(m->clods,0,n);memset(m->print,0,n);memset(m->print_dir,0,n);memset(m->print_off,0,n);
+    m->has_last[0]=m->has_last[1]=0;
+    if(op==1&&s->soil)memset(s->soil->cell,0,(size_t)s->soil->width*s->soil->height*sizeof(*s->soil->cell));
+    if(s->soft){MxdSoft *f=s->soft;const size_t ft=(size_t)f->tiles_x*f->tiles_z;
+        for(size_t t=0;t<ft;t++)if(f->tile[t]){free(f->tile[t]);f->tile[t]=NULL;f->tile_serial[t]++;}
+        memset(f->tile_fresh,0,ft);f->allocated=0;f->has_last[0]=f->has_last[1]=0;}
+    memset(s->bump,0,sizeof(s->bump));s->soil_touched=1;return 1;
+}
+/* fork: the bike's own tyres (from its .tyre files): widths m (0 = default), rear KnobsFactor (0 = default)
+   and SlipSinkage (0 = default). Knobs scale the roost a spinning rear throws, relative to the tuned MX tyre (0.4). */
+int mxdirt_session_set_tyres(MxdirtSession *s,const float width[2],float knobs_rear,float slip_sinkage){
+    if(!owned(s)||!s->sim||!width)return 0;
+    for(int w=0;w<2;w++)s->tyre_width[w]=isfinite(width[w])&&width[w]>=.05f&&width[w]<=.3f?width[w]:0.f;
+    s->sim->p.roost_gain=.011f*(isfinite(knobs_rear)&&knobs_rear>0.f?fmaxf(.6f,fminf(1.8f,sqrtf(knobs_rear/.4f))):1.f);
+    s->sim->p.slip_sink=isfinite(slip_sinkage)&&slip_sinkage>0.f?fminf(3.f,slip_sinkage):1.f;return 1;
+}
+/* fork: brake inputs from the game's telemetry (0..1 front, rear), for this frame's passes. */
+void mxdirt_session_set_inputs(MxdirtSession *s,const float brake[2]){
+    if(!s||!brake)return;for(int w=0;w<2;w++)s->brake_in[w]=isfinite(brake[w])?fmaxf(0.f,fminf(1.f,brake[w])):0.f;
+}
+int mxdirt_session_set_lean_erosion(MxdirtSession *s,float percent){
+    if(!owned(s)||!s->sim||!isfinite(percent)||percent<0.f||percent>200.f)return 0;
+    s->sim->p.lean_gain=.7f*percent/100.f;return 1;
+}
+int mxdirt_session_set_wall_angle(MxdirtSession *s,float deg){
+    if(!owned(s)||!s->sim||!isfinite(deg)||deg<0.f||deg>85.f)return 0;
+    s->sim->p.wall_tan=deg>0.f?tanf(deg*3.14159265f/180.f):0.f;return 1;
+}
+int mxdirt_session_set_rut_width(MxdirtSession *s,float width_cm,float out[3]){
+    if(!owned(s)||!s->sim||!isfinite(width_cm)||width_cm<0.f||width_cm>200.f)return 0;
+    const float c=s->sim->cell_x;s->sim->p.band_m=.005f*width_cm;
+    if(out){out[0]=c;out[1]=2.f*s->sim->p.band*c;out[2]=width_cm>0.f?2.f*fmaxf(s->sim->p.band_m,MXB_SIM_BAND_MIN*c):out[1];}return 1;
 }
 /* Soft top layer: every real tyre pass (live, extra riders, ghosts, pre-wear)
    presses it; the live gate lines (print_fade 1) are wear only. Pre-wear
@@ -485,8 +533,11 @@ static void sim_wheel(const MxdirtSession *s,const MxdirtContact *i,int w,float 
     o->fwd[0]=i->forward[0]/fl;o->fwd[1]=i->forward[2]/fl;o->lat[0]=i->lateral[0]/ll;o->lat[1]=i->lateral[2]/ll;
     o->speed=fmaxf(0.f,(i->center_velocity[0]*o->fwd[0]+i->center_velocity[2]*o->fwd[1])*m);
     o->slip_long=i->slip[2]*(i->direction<0.f?-1.f:1.f)*m;o->slip_lat=i->slip[0]*m;
-    o->load=i->load_n;
-    o->width=w?.15f:.11f;o->radius=w?.33f:.35f;o->gain=gain;o->dt=i->dt;
+    o->load=i->load_n;o->lean=i->lean;
+    /* fork: the bike's own wheel radius (read from its wheel definition by mxdirt_wheel_sample), so smaller or
+       bigger wheels sink and cut their own footprint; width stays the tyre-class default (not read yet). */
+    const float *rv=s->wheel[w].radius_vector_metres;const float rr=sqrtf(rv[0]*rv[0]+rv[1]*rv[1]+rv[2]*rv[2]);
+    o->width=s->tyre_width[w]>0.f?s->tyre_width[w]:(w?.15f:.11f);o->radius=rr>.2f&&rr<.6f?rr:(w?.33f:.35f);o->gain=gain;o->dt=i->dt;
     o->valid=isfinite(o->x)&&isfinite(o->z)&&isfinite(o->speed)&&isfinite(o->slip_long)&&isfinite(o->slip_lat)&&isfinite(o->load)&&o->load>0.f;
 }
 int mxdirt_session_set_bumps(MxdirtSession *s,float percent){
@@ -553,7 +604,7 @@ int mxdirt_session_step(MxdirtSession *s,const MxdirtControllerFrame frames[2],
     for(int w=0;w<2;w++){
         s->live_ok[w]=0;
         if(s->priming){s->sim->has_last[w]=0;continue;}
-        MxbSoilSimWheel sw;sim_wheel(s,&input[w],w,gains[w],&sw);sw.material=material[w];sw.floor_bias=biases[w];sw.bias_floor=floors[w]>0.f?floors[w]:s->bias_floor_m;sw.turn=bumps[w].valid?mxb_bump_turn(&bumps[w].sit):0.f;sw.brake=bumps[w].valid?fmaxf(bumps[w].gb,fminf(1.f,fmaxf(0.f,(-sw.slip_long/fmaxf(sw.speed,1.f)-.10f)/.65f))):0.f; /* braking or hard on the gas */sw.impact=bumps[w].valid&&bumps[w].sit.since<.25f?1.f-bumps[w].sit.since/.25f:0.f;
+        MxbSoilSimWheel sw;sim_wheel(s,&input[w],w,gains[w],&sw);sw.material=material[w];sw.floor_bias=biases[w];sw.bias_floor=floors[w]>0.f?floors[w]:s->bias_floor_m;sw.turn=bumps[w].valid?mxb_bump_turn(&bumps[w].sit):0.f;sw.brake=bumps[w].valid?fmaxf(bumps[w].gb,fminf(1.f,fmaxf(0.f,(-sw.slip_long/fmaxf(sw.speed,1.f)-.10f)/.65f))):0.f; /* braking or hard on the gas */sw.brake=fmaxf(sw.brake,.6f*s->brake_in[w]); /* fork: where the rider actually brakes, the bump rows run wide */sw.impact=bumps[w].valid&&bumps[w].sit.since<.25f?1.f-bumps[w].sit.since/.25f:0.f;
         {const float d0=s->sim->p.depth_scale;s->sim->p.depth_scale=d0*(s->bump_gain>0.f?mxb_live_gate_share(&s->gate,1):1.f)*mxb_live_wear_depth(&s->wear); /* this pass's wear shared over the gate lines */
          mxb_soil_sim_wheel(s->sim,(unsigned)w,&sw);
          if(s->bump_gain>0.f)mxb_live_gate_wheel(s->sim,&s->gate,(unsigned)w,&sw,bumps[w].gs,bumps[w].gb,bumps[w].ge,bumps[w].landed);

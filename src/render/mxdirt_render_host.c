@@ -44,7 +44,7 @@ enum { A_START=1,A_HASH_FAIL,A_GATE_FAIL,A_INSTALL,A_INSTALL_FAIL,A_ROLLBACK,
  A_SLOT_INSTALL,A_SLOT_FAIL,A_NONQUIESCENT,A_SHUTDOWN,A_OVERFLOW,A_GENERATION,A_SLOT_CHECK,A_COUNT };
 static const char *const audit_names[A_COUNT]={"?","start","exe_hash_mismatch","gate_fail","install","install_fail","rollback",
  "foreign_call","foreign_slot","protection","thread","context","frame","run","slot_install","slot_fail","nonquiescent","shutdown","overflow","generation","slot_check"};
-enum { S_READ_FAILED=1,S_ABSENT,S_NOT_EXECUTABLE,S_RESOLVE_MISMATCH,S_VERIFIED,S_REPLACE_FAILED };
+enum { S_READ_FAILED=1,S_ABSENT,S_NOT_EXECUTABLE,S_RESOLVE_MISMATCH,S_VERIFIED,S_REPLACE_FAILED,S_CHAINED };
 typedef struct {volatile LONG ready;uint32_t code;DWORD thread;uint64_t tick;uintptr_t a,b;uint32_t slot,reason;} Audit;
 typedef struct {uint32_t event;uint64_t generation;} Lifecycle;
 /* MX Bikes' GL entry-point slots (rva of the stored function pointers) and the
@@ -171,11 +171,13 @@ static int install_slots(void){
   if(!safe_copy(NULL,(uintptr_t)image_base+slot_rva[i],&p,8))reason=S_READ_FAILED;
   else if(!p&&i<2)reason=S_ABSENT;
   else if(!executable(p))reason=S_NOT_EXECUTABLE;
-  else if(p!=resolved)reason=S_RESOLVE_MISMATCH;
+  /* fork: another plugin (e.g. a graphics overhaul) already wrapped this slot. Chain on top of it: our
+     wrapper forwards to its pointer, and restore puts its pointer back only if the slot still holds ours. */
+  else if(p!=resolved)reason=p==gl_wrapper(i)?S_RESOLVE_MISMATCH:S_CHAINED;
   else reason=S_VERIFIED;
   mark_detail(A_SLOT_CHECK,(uintptr_t)p,(uintptr_t)resolved,i,reason);
   if(reason==S_ABSENT)continue; /* absent extension: the game falls through */
-  if(reason!=S_VERIFIED)goto fail;
+  if(reason!=S_VERIFIED&&reason!=S_CHAINED)goto fail;
   slot_original[i]=p;
  }
  for(i=0;i<3;i++)if(slot_original[i]){
@@ -404,6 +406,9 @@ API void EventInit(void *data,int size){
  if(atomic(&event_allowed)||retire_pending||call_owned||surface_owned){mark(A_GATE_FAIL,1,0);SetLastError(error);return;}
  for(unsigned i=0;i<3;i++)if(slot_owned[i]){mark(A_GATE_FAIL,3,i);SetLastError(error);return;}
  RenderEvent e;
+ /* fork: nothing of ours is installed here, so a slot another plugin rewired during the last track is
+    no reason to stay off: chain onto whatever it holds now. */
+ if(!call_owned&&!surface_owned)InterlockedExchange(&foreign,0);
  if(!content_ready||!verified_image||!data||size<(int)sizeof(e)||atomic(&foreign)||!configuration()||
     !safe_copy(NULL,(uintptr_t)data,&e,sizeof(e))||!event_valid(&e)){mark(A_GATE_FAIL,4,0);flush_log(0);SetLastError(error);return;}
  generation=0;generation_fault=0;render_thread=0;render_context=NULL;mxd_fr_expire(&frame_reads);frame_reads_age=0;
@@ -412,6 +417,8 @@ API void EventInit(void *data,int size){
  if(install_calls()){InterlockedExchange(&event_allowed,1);notify_lifecycle(MXDIRT_EVENT_BEGIN);}else mark(A_INSTALL_FAIL,0,0);
  flush_log(0);SetLastError(error);
 }
+/* fork: for the core plugin's menu: [0] GPU ms, [1] frames drawn, [2] 1 hooks live, 0 off, -1 another plugin took a hook */
+API int MxDirtRenderStats(double out[3]){if(!out)return 0;mxdirt_content_stats(out);out[2]=atomic(&foreign)?-1.:atomic(&event_allowed)?1.:0.;return 1;}
 API void RunInit(void *data,int size){
  (void)data;(void)size;DWORD error=GetLastError();if(lifecycle_owner()&&atomic(&event_allowed)){
   InterlockedExchange(&run_initialized,1);notify_lifecycle(MXDIRT_RUN_INIT);}SetLastError(error);

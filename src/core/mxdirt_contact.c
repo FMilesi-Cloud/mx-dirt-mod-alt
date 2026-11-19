@@ -46,6 +46,10 @@ int mxdirt_contact_physics(MxdirtContactBridge *b,const MxdirtPhysicsSample *s) 
         if(!isfinite(length)||length<=1.e-6f)return 0;
         for(int k=0;k<3;k++)next.longitudinal[k]/=length;
         cross3(next.lateral,s->normal,next.longitudinal);
+        /* fork: lateral is the axle projected on the ground, so an axle rising on the +lateral side tilts the
+           wheel's top toward -lateral: lean = -(axle . normal), + when the wheel leans toward +lateral. */
+        {const float a_n=dot3(axle,s->normal),nn=sqrtf(dot3(s->normal,s->normal));
+         next.lean=nn>1.e-6f?fmaxf(-1.f,fminf(1.f,-a_n/nn)):0.f;}
         /* Contact on the tyre circle below the reported point. */
         float lever[3];for(int k=0;k<3;k++)lever[k]=s->point_metres[k]-s->body.center[k];
         length=sqrtf(dot3(lever,lever));if(!isfinite(length)||length<=1.e-6f)return 0;
@@ -95,7 +99,7 @@ int mxdirt_contact_frame(MxdirtContactBridge *b,const MxdirtControllerFrame *f,M
         c.slip[k]=b->contact_velocity_native[k];
     }
     if(!finite3(c.point))return 0;
-    c.direction=direction;c.load_n=b->load_n;c.dt=f->dt;
+    c.direction=direction;c.lean=b->lean;c.load_n=b->load_n;c.dt=f->dt;
     c.contact=f->qualified_contact;c.deformation=f->deformation_enabled;
     c.frame_mean_n=next.load_count?next.load_sum_n/(float)next.load_count:0.f;c.frame_count=next.load_count;
     c.frame_slow_n=next.load_slow_n;next.load_sum_n=0.f;next.load_count=0;

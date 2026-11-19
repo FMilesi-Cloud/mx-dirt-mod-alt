@@ -46,6 +46,18 @@ int mxdirt_session_set_dirt_response(MxdirtSession *,float hardness_percent,floa
 int mxdirt_session_set_dirt_weather(MxdirtSession *,float drying_percent,float sweep_percent);
 /* Rut shape 0..300 % each: capture into grooves, damp-wall cohesion, roost clods. */
 int mxdirt_session_set_dirt_shape(MxdirtSession *,float capture_percent,float cohesion_percent,float clods_percent);
+/* fork: full rut width in cm (0 = legacy per-cell width). out[3] = {sim cell m, legacy full band m, effective full band m}. */
+int mxdirt_session_set_rut_width(MxdirtSession *,float width_cm,float out[3]); /* fork: also live */
+/* fork: live terrain operation, 1 = reset to the untouched track, 2 = smooth (halve). Owner thread. */
+int mxdirt_session_terrain_op(MxdirtSession *,int op);
+/* fork: the bike's own tyre widths (m), rear KnobsFactor and SlipSinkage; 0 = default. Owner. */
+int mxdirt_session_set_tyres(MxdirtSession *,const float width[2],float knobs_rear,float slip_sinkage);
+/* fork: rider brake inputs 0..1 (front, rear) from telemetry for the next step; zeros when unknown. */
+void mxdirt_session_set_inputs(MxdirtSession *,const float brake[2]);
+/* fork: lean erosion 0..200 % (100 = default), live. */
+int mxdirt_session_set_lean_erosion(MxdirtSession *,float percent);
+/* fork: cap on rut wall steepness in degrees (0 = off), live. */
+int mxdirt_session_set_wall_angle(MxdirtSession *,float deg);
 /* Braking bumps 0..200 % (0 = no bump stress, no live gate), before the first step. */
 int mxdirt_session_set_bumps(MxdirtSession *,float percent);
 /* Rolling bumps 0..100 %: bump stress with no braking or drive. Before the first step. */
