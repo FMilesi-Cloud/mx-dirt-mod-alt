@@ -28,7 +28,9 @@ typedef struct {
  float cell,thickness,unit,origin_x,origin_z; /* unit: m per height step; origin: world x,z of grid vertex (0,0) */
  int solid,sink; /* solid: the ground texture follows the relief; sink: also write the raised layer's depth (the bike sinks into it) */
 } MxDirtSoftInput;
-int mxdirt_gl_draw(MxDirtGl *,const MxDirtCameraScope *,const MxDirtWindow *,const MxDirtLook *,const MxDirtState *state,const MxDirtSoftInput *soft);
+/* fork: the track crew machine to draw this frame (kind 0 = none): world x/z (metres), unit heading x/z, speed m/s */
+typedef struct {int kind;float x,z,fwd[2],speed;} MxDirtCrewInput;
+int mxdirt_gl_draw(MxDirtGl *,const MxDirtCameraScope *,const MxDirtWindow *,const MxDirtLook *,const MxDirtState *state,const MxDirtSoftInput *soft,const MxDirtCrewInput *crew);
 /* The draw target seen at the last full state check (FBO name, its sample count)
    and why the last frame was not drawn: 0 drawn, 1 camera changed, 2 transform
    feedback / rasterizer discard, 3 an open query, 4 unusable target or viewport,

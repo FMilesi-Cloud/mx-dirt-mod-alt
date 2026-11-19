@@ -191,7 +191,7 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
    mxdirt_content_note("dirt_disabled resource_create=1 stage=%d gl_major=%d profile_mask=%d gl_version=%s gl_renderer=%s",stage,major,profile,ver?ver:"?",ren?ren:"?");return -1;}}
  /* The dirt sim's own per-texel state; without it the pass shades from the height delta only. */
  MxDirtState state;memset(&state,0,sizeof(state));rc_state_live=0;
- if(frame->sim_comp){MxDirtSim sim={frame->sim_comp,frame->sim_loose,frame->sim_moist,frame->sim_clods,frame->sim_size,frame->sim_vertex_exact,frame->sim_moisture,frame->sim_compaction0,frame->sim_steps};
+ if(frame->sim_comp){MxDirtSim sim={frame->sim_comp,frame->sim_loose,frame->sim_moist,frame->sim_clods,frame->sim_size,frame->sim_vertex_exact,frame->sim_moisture,frame->sim_compaction0,frame->sim_steps,frame->sim_water,frame->sim_crust,frame->sim_exposed};
   rc_state_live=mxdirt_state(rc_cpu,&window,terrain->width,terrain->height,&sim,&state);}
  rc_part[1]=rc_elapsed(start)-rc_part[0];
  /* The core's soft top layer (look only), when both sides have it on. */
@@ -200,7 +200,12 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
   soft.tile=frame->soft_tile;soft.serial=frame->soft_tile_serial;soft.tiles_x=frame->soft_tiles_x;soft.tiles_z=frame->soft_tiles_z;soft.side=frame->soft_tile_side;
   soft.cell=frame->soft_cell_m;soft.thickness=frame->soft_thickness_m;soft.unit=(float)frame->soft_unit_um*1e-6f;soft.origin_x=frame->origin_m[0];soft.origin_z=frame->origin_m[2];soft.solid=rc_soft_solid;soft.sink=rc_tyre_sink;soft_on=1;}
  rc_soft_live=soft_on;
- int result=mxdirt_gl_draw(rc_gl,scope,&window,&rc_look,&state,soft_on?&soft:NULL);rc_ticks=rc_elapsed(start);
+ /* fork: the track crew machine, if one is out: sim metres from the terrain centre -> world */
+ MxDirtCrewInput crew;memset(&crew,0,sizeof(crew));
+ if(frame->crew_kind>0&&isfinite(frame->crew_x_m)&&isfinite(frame->crew_z_m)){crew.kind=frame->crew_kind;
+  crew.x=frame->origin_m[0]+.5f*frame->span_x_m+frame->crew_x_m;crew.z=frame->origin_m[2]+.5f*frame->span_z_m+frame->crew_z_m;
+  crew.fwd[0]=frame->crew_fwd[0];crew.fwd[1]=frame->crew_fwd[1];crew.speed=frame->crew_speed;}
+ int result=mxdirt_gl_draw(rc_gl,scope,&window,&rc_look,&state,soft_on?&soft:NULL,&crew);rc_ticks=rc_elapsed(start);
  rc_part[2]=rc_ticks-rc_part[0]-rc_part[1];
  if(rc_ticks>rc_peak){rc_peak=rc_ticks;memcpy(rc_peak_part,rc_part,sizeof(rc_part));}
  if(result<0){rc_dirt_fault=1;mxdirt_content_note("dirt_disabled resource_or_owner=1");}return result;

@@ -137,7 +137,7 @@ static inline float mxd_soft_wander(float x,uint32_t seed){
     float va=(float)(a&0xffff)/32767.5f-1.f,vb=(float)(b&0xffff)/32767.5f-1.f,t=f*f*(3.f-2.f*f);return va+(vb-va)*t;
 }
 static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const float fwd[2],const float lat[2],
-    float v,float dt,float load,float spin,float skid,float slip_lat,int material,int fresh,const MxdSoftSoil *soil){
+    float v,float dt,float load,float spin,float skid,float slip_lat,int material,int fresh,const MxdSoftSoil *soil,float gentle){
     if(!s||!(s->thickness>0.f)||!isfinite(X)||!isfinite(Z)||!(dt>0.f)||dt>.1f||!isfinite(v)||!isfinite(load))return;
     float fl=hypotf(fwd[0],fwd[1]);if(!(fl>1e-4f))return;
     /* join this pass to where this wheel's last one ended, so the trench runs on
@@ -153,12 +153,14 @@ static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const floa
     const float T=fminf(.10f,s->thickness*mf*sf);
     const float len=seg>=0.f?seg:fminf(1.f,fmaxf(0.f,v)*dt),hw=rear?.075f:.058f,patch=.05f,st=s->cell*.7f;
     /* damp: tall narrow lips; dry: low wide crumbly ones */
-    const float lipw=.06f-.015f*md,lip_peak=.015f-.006f*md,level=.5f*pk;
+    const float lipw=.06f-.015f*md,lip_peak=(.015f-.006f*md)*(1.f-.6f*fminf(1.f,fmaxf(0.f,isfinite(gentle)?gentle:0.f))),level=.5f*pk;
     /* angle of repose: dry loose soil ~34 deg, damp holds ~50 deg */
     const float repose=.67f+.52f*fminf(1.f,fmaxf(0.f,(mo-.15f)/.4f));
     spin=fminf(1.f,fmaxf(0.f,isfinite(spin)?spin:0.f));skid=fminf(1.f,fmaxf(0.f,isfinite(skid)?skid:0.f));if(!isfinite(slip_lat))slip_lat=0.f;
     /* the tread presses the layer down by its load; a spinning tyre digs through it */
     float press=fminf(.88f,fmaxf(.45f,.45f+.30f*load/1200.f));if(spin>.15f)press=fmaxf(press,.75f+.25f*spin);
+    /* fork: pushed / paddled / walking pace: the tyre only presses the layer (shallow, crisp, hardly any lip) */
+    gentle=fminf(1.f,fmaxf(0.f,isfinite(gentle)?gentle:0.f));press*=1.f-.6f*gentle;if(press<.15f)press=.15f;
     const float floor_u=-T*press/MXD_SOFT_UNIT;const int cap=(int)fminf(127.f,T*(1.3f+.3f*md)/MXD_SOFT_UNIT);
     const uint8_t dir=(uint8_t)((int)lrintf(atan2f(f1,f0)/3.14159265f*32.f)&31);
     const int knobs=fresh&&mo>.12f&&spin<.15f&&skid<.3f&&fabsf(slip_lat)<1.5f; /* bone-dry dust keeps no knob pits */const uint8_t tag=(uint8_t)((knobs?0x80:0)|(s->defer_relax?0:0x60)|dir);
@@ -169,7 +171,7 @@ static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const floa
     const float roost=spin>.15f?fminf(.8f,1.2f*spin):0.f,push=skid>.15f?fminf(.6f,skid):0.f;
     const float slide=fminf(8.f,fabsf(slip_lat)),fast=fminf(1.f,fmaxf(0.f,(v-4.f)/10.f));
     /* the tyre weaves and squirms: the trench centre wanders a few cm (more under wheelspin or in a slide) */
-    const float weave=(rear?.014f:.022f)+.022f*fminf(1.f,2.f*spin)+.012f*fminf(1.f,slide);
+    const float weave=((rear?.014f:.022f)+.022f*fminf(1.f,2.f*spin)+.012f*fminf(1.f,slide))*(1.f-.5f*gentle);
     s->serial++;if(!s->serial)s->serial=1;s->stamps++;
     /* fresh soil dries over a few laps: the ageing sweep crosses the whole grid in ~30 s of riding (dt is
        per wheel, two wheels a bike), a freshness level lasts ~3 sweeps, three levels ~4-5 minutes */
@@ -235,6 +237,47 @@ static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const floa
         mxd_soft_add(s,x,z,q*.5f,cap);
         for(int j=0;j<4;j++){static const float o[4][2]={{1,0},{-1,0},{0,1},{0,-1}};mxd_soft_add(s,x+o[j][0]*s->cell,z+o[j][1]*s->cell,q*.125f,cap);}
     }
+}
+/* fork: one boot print in the layer. X,Z: middle of the sole (m from the terrain centre); fwd: where the toe
+   points; force: N through the foot. A ~30 x 11 cm sole, deeper at the toe (the foot pushes off it), with cross
+   bars of tread; the soil it moves is pushed back behind the heel and a little to the sides. Damp soil takes a
+   deep crisp print, dry or packed ground hardly any. */
+static inline void mxd_soft_boot(MxdSoft *s,float X,float Z,const float fwd[2],float force,const MxdSoftSoil *soil){
+    if(!s||!(s->thickness>0.f)||!isfinite(X)||!isfinite(Z)||!isfinite(force)||!(force>0.f))return;
+    float fl=hypotf(fwd[0],fwd[1]);if(!(fl>1e-4f))return;
+    const float f0=fwd[0]/fl,f1=fwd[1]/fl,n0=-f1,n1=f0,px=X+.5f*s->span_x,pz=Z+.5f*s->span_z;
+    const float mo=soil&&isfinite(soil->moisture)?fminf(1.f,fmaxf(0.f,soil->moisture)):.35f;
+    const float pk=soil&&isfinite(soil->packed)?fminf(1.f,fmaxf(0.f,soil->packed)):0.f;
+    const float sf=soil&&isfinite(soil->thick)?fminf(1.6f,fmaxf(.3f,soil->thick)):1.f;
+    /* fork: the boot's own depth, not the layer's: a thin layer (10 mm) left prints of 3-4 mm. The renderer shows
+       down to 2 x thickness, so stay inside that. */
+    const float T=fminf(1.9f*s->thickness,.03f*sf)/.38f;
+    const float press=fminf(.38f,fmaxf(.08f,.18f+.45f*force/350.f)*(.45f+1.1f*fminf(1.f,mo/.6f))*(1.f-.65f*pk)); /* ~2-3 cm in loose damp dirt at most */
+    if(!(press>.02f))return;
+    const int cap=(int)fminf(127.f,T*1.5f/MXD_SOFT_UNIT);
+    const float hl=.15f,hw=.055f,ext=hl+.07f;
+    const uint8_t dir=(uint8_t)((int)lrintf(atan2f(f1,f0)/3.14159265f*32.f)&31),tag=(uint8_t)((s->defer_relax?0:0x60)|dir);
+    s->serial++;if(!s->serial)s->serial=1;s->stamps++;
+    float removed=0.f;
+    const int a0=(int)floorf((px-ext)/s->cell),a1=(int)floorf((px+ext)/s->cell),b0=(int)floorf((pz-ext)/s->cell),b1=(int)floorf((pz+ext)/s->cell);
+    for(int b=b0;b<=b1;b++)for(int a=a0;a<=a1;a++){
+        const float tx=((float)a+.5f)*s->cell-px,tz=((float)b+.5f)*s->cell-pz,u=tx*f0+tz*f1,w=tx*n0+tz*n1;
+        const float e=(u/hl)*(u/hl)+(w/hw)*(w/hw);if(e>1.f)continue;
+        /* toe deeper, heel shallower; tread bars every ~2.4 cm across the sole; soft rim */
+        const float toe=1.f+.35f*fmaxf(-1.f,fminf(1.f,u/hl)),bar=cosf(6.2831853f*u/.024f)>.2f?1.f:.72f,rim=fminf(1.f,4.f*(1.f-e));
+        uint8_t *p=mxd_soft_at(s,a,b);if(!p)continue;
+        const int cur=(int)p[0]-128,tgt=(int)lrintf(-fminf(1.9f*s->thickness,T*press*toe*bar*rim)/MXD_SOFT_UNIT);
+        if(cur>tgt){removed+=(float)(cur-tgt);p[0]=(uint8_t)(tgt+128);}
+        p[1]=tag; /* not a tyre: no crisp knob bit */
+    }
+    /* the foot pushes off: most of the soil goes back behind the heel, the rest to the sides */
+    const float back=removed*.07f,side=removed*.04f; /* most of it packs under the sole */
+    for(int k=0;k<6;k++){const float u=-hl-.01f-.01f*(float)k,ww=(.6f-.08f*(float)k);
+        for(int j=-2;j<=2;j++){const float w=.022f*(float)j;mxd_soft_add(s,px+f0*u+n0*w,pz+f1*u+n1*w,back*ww/(5.f*2.4f),cap);}}
+    for(int k=-4;k<=4;k++){const float u=.035f*(float)k;
+        mxd_soft_add(s,px+f0*u+n0*(hw+.012f),pz+f1*u+n1*(hw+.012f),side/9.f,cap);mxd_soft_add(s,px+f0*u-n0*(hw+.012f),pz+f1*u-n1*(hw+.012f),side/9.f,cap);}
+    if(!s->defer_relax){const float repose=.67f+.52f*fminf(1.f,fmaxf(0.f,(mo-.15f)/.4f));
+        mxd_soft_relax(s,a0-2,b0-2,a1+2,b1+2,(int)lrintf(repose*s->cell/MXD_SOFT_UNIT));}
 }
 /* Loose soil the dirt sim drops on the ground (berms beside the line, soil shoved
    ahead into bump rows, roost spray behind a spinning tyre). It lands in the layer's

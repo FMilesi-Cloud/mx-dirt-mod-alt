@@ -143,6 +143,7 @@ int mxdirt_height_field_set_vertex_exact(MxdirtHeightField *p,int enabled){
 }
 /* fork: new reference surface (live reset / smooth): initial = round(current * factor), within the cell's bounds.
    The sim then restarts from its neutral value on top of it. */
+int mxdirt_height_field_scale_initial(MxdirtHeightField *p,float factor){return p&&mxdirt_height_field_rebase(p,p->initial,p->cells,factor);}
 int mxdirt_height_field_rebase(MxdirtHeightField *p,const int32_t *current,size_t count,float factor){
     if(!p||!current||count<p->cells||!isfinite(factor)||factor<0.f||factor>1.f)return 0;
     for(size_t k=0;k<p->cells;k++){double v=(double)current[k]*factor;v=v>=0.?floor(v+.5):ceil(v-.5);

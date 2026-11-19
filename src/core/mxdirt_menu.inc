@@ -10,7 +10,7 @@ typedef struct {char text[100];float pos[2];int font;float size;int justify;unsi
 _Static_assert(sizeof(MenuQuad)==40&&sizeof(MenuString)==124,"MX Bikes draw ABI");
 static int ra_settings_load(void);
 enum {MK_VAL,MK_ACT,MK_INFO};
-enum {A_RESET=1,A_SMOOTH=2,A_WATER=3,A_PROFILE_SAVE=10,A_PROFILE_DEL,A_OH_RUTS_OFF=20,A_SAVE_AS=30,A_PRESET=31};
+enum {A_RESET=1,A_SMOOTH=2,A_WATER=3,A_GRADER=5,A_TRUCK=6,A_PROFILE_SAVE=10,A_PROFILE_DEL,A_OH_RUTS_OFF=20,A_SAVE_AS=30,A_PRESET=31};
 /* file 0 = mx_dirt.ini, 1 = mx_dirt_render.ini */
 typedef struct {const char *label,*label_en;int kind,file;const char *section,*key;int lo,hi,step,def;const char *unit;int later,op;} MenuRow;
 static const MenuRow menu_phys[]={
@@ -22,6 +22,16 @@ static const MenuRow menu_phys[]={
  {"Ancho de surco","Rut width",MK_VAL,0,"soil","rut_width_cm",0,80,2,36,"cm",0,0},
  {"Angulo max. de pared","Max wall angle",MK_VAL,0,"soil","wall_angle_deg",0,85,1,40,"deg",0,0},
  {"Erosion por inclinacion","Lean erosion",MK_VAL,0,"soil","lean_erosion_percent",0,200,10,100,"%",0,0},
+ {"Huella suave sin traccion","Soft print without pull",MK_VAL,0,"soil","gentle_print_percent",0,100,10,70,"%",0,0},
+ {"Marcas de botas (umbral)","Boot prints (threshold)",MK_VAL,0,"soil","boot_prints_threshold_percent",0,30,1,8,"%",0,0},
+ {"Marcas de caidas","Crash marks",MK_VAL,0,"soil","crash_marks_percent",0,200,10,100,"%",0,0},
+ {"Bermas que revientan","Berm blowouts",MK_VAL,0,"soil","berm_blowout_percent",0,200,10,100,"%",0,0},
+ {"Base dura que aflora","Bare hard base",MK_VAL,0,"soil","exposed_base_percent",0,300,10,100,"%",0,0},
+ {"Costra seca","Dry crust",MK_VAL,0,"soil","crust_percent",0,300,10,100,"%",0,0},
+ {"Charcos","Puddles",MK_VAL,0,"soil","puddles_percent",0,300,10,100,"%",0,0},
+ {"Erosion por lluvia","Rain erosion",MK_VAL,0,"soil","rain_erosion_percent",0,300,10,100,"%",0,0},
+ {"Whoops de arena","Sand whoops",MK_VAL,0,"soil","sand_whoops_percent",0,300,10,100,"%",0,0},
+ {"Labios y aterrizajes realistas","Realistic lips and landings",MK_VAL,0,"soil","lips_realistic",0,1,1,0,"",0,0},
  {"Cohesion de paredes","Wall cohesion",MK_VAL,0,"soil","wall_cohesion_percent",0,300,10,100,"%",0,0},
  {"Captura de surco","Rut capture",MK_VAL,0,"soil","rut_capture_percent",0,300,10,100,"%",0,0},
  {"Baches de frenado","Braking bumps",MK_VAL,0,"soil","braking_bumps_percent",0,200,10,100,"%",0,0},
@@ -31,6 +41,7 @@ static const MenuRow menu_phys[]={
 };
 static const MenuRow menu_look[]={
  {"Shading de tierra","Dirt shading",MK_VAL,1,"renderer","dirt_material",0,1,1,1,"",0,0},
+ {"Maquinas de la comunidad (si estan)","Community machines (if installed)",MK_VAL,1,"crew","community_models",0,1,1,1,"",1,0},
  {"Intensidad del shading","Shading strength",MK_VAL,1,"renderer","dirt_strength",0,200,10,135,"%",0,0},
  {"Relieve (oscurece lo hundido)","Relief (darkens dug ground)",MK_VAL,1,"renderer","dirt_relief",0,200,10,100,"%",0,0},
  {"Grano de tierra suelta","Loose dirt grain",MK_VAL,1,"renderer","dirt_loose",0,100,5,55,"%",0,0},
@@ -45,6 +56,9 @@ static const MenuRow menu_track[]={
  {"Resetear todo ahora","Reset everything now",MK_ACT,0,0,0,0,0,0,0,"",0,A_RESET},
  {"Alisar (surcos a la mitad)","Smooth (ruts halved)",MK_ACT,0,0,0,0,0,0,0,"",0,A_SMOOTH},
  {"Regar la pista","Water the track",MK_ACT,0,0,0,0,0,0,0,"",0,A_WATER},
+ {"Saltar animaciones (todo al instante)","Skip animations (everything at once)",MK_VAL,0,"menu","skip_animations",0,1,1,0,"",0,0},
+ {"Pasar la niveladora (por mi linea)","Run the grader (along my line)",MK_ACT,0,0,0,0,0,0,0,"",0,A_GRADER},
+ {"Pasar el camion regador (por mi linea)","Run the water truck (along my line)",MK_ACT,0,0,0,0,0,0,0,"",0,A_TRUCK},
  {"Desgaste inicial (pilotos)","Starting wear (riders)",MK_VAL,0,"soil","prewear_riders",0,400,10,50,"",1,0},
  {"Dispersion de lineas","Line spread",MK_VAL,0,"soil","prewear_spread_cm",0,500,10,140,"cm",1,0},
  {"Mantener desgaste guardado","Keep saved wear",MK_VAL,0,"soil","prewear_fresh_only",0,1,1,1,"",1,0},
@@ -192,11 +206,16 @@ static void menu_oh_poll(void){
  if(wet>menu_oh_wet+.05f&&wet>0.f&&ra_session){int base=menu_read(0,"soil","dirt_sim_moisture_percent",35);
   InterlockedExchange(&ra_menu_moisture,(LONG)(base+(90-base)*wet));InterlockedExchange(&ra_menu_request,4);}
  menu_oh_wet=wet;
+ InterlockedExchange(&ra_rain_permille,(LONG)lrintf(1000.f*(wet>.15f?wet:0.f))); /* fork (3, 4): rain on the soil */
 }
 /* ---- actions ---- */
 static void menu_action(int op){
  char p[MAX_PATH];
  switch(op){
+ case A_GRADER:case A_TRUCK:
+  if(!ra_session){menu_say(TR("Primero entra a la pista","Get on the track first"));break;}
+  {MxdirtPhaseStats q;if(!mxdirt_session_phase_stats(ra_session,&q)||q.path_points<50){menu_say(TR("Hace falta una vuelta grabada en esta pista","Needs a recorded lap on this track"));break;}}
+  InterlockedExchange(&ra_menu_request,op);menu_say(op==A_GRADER?TR("La niveladora sale por tu linea","The grader is out on your line"):TR("El regador sale por tu linea","The water truck is out on your line"));break;
  case A_RESET:case A_SMOOTH:case A_WATER:
   if(!ra_session){menu_say(TR("Primero entra a la pista","Get on the track first"));break;}
   InterlockedExchange(&ra_menu_request,op);menu_say(op==A_RESET?TR("Pista reseteada","Track reset"):op==A_SMOOTH?TR("Pista alisada","Track smoothed"):TR("Pista regada","Track watered"));break;
@@ -228,7 +247,7 @@ static void menu_activate(int i){
  if(r[i].kind==MK_VAL){if(r[i].hi==1)menu_change(i,menu_value[i]?-1:1);return;}
  if(r[i].kind!=MK_ACT)return;
  /* destructive actions ask twice */
- if(r[i].op==A_RESET||r[i].op==A_SMOOTH||r[i].op==A_PROFILE_DEL){
+ if(r[i].op==A_RESET||r[i].op==A_SMOOTH||r[i].op==A_GRADER||r[i].op==A_PROFILE_DEL){
   if(menu_confirm_row!=i||GetTickCount()-menu_confirm_tick>3000){menu_confirm_row=i;menu_confirm_tick=GetTickCount();return;}}
  menu_confirm_row=-1;menu_action(r[i].op);
 }
@@ -338,6 +357,9 @@ static void menu_draw(int hover){
   if(!strcmp(q->key,"language"))snprintf(v->text,100,"<  %s  >",x?"English":"Espanol");
   else if(q->hi==1)snprintf(v->text,100,"%s",x?TR("SI","YES"):"NO");
   else if(!strcmp(q->key,"rut_width_cm")&&!x)snprintf(v->text,100,"<  original  >");
+  else if((!strcmp(q->key,"crash_marks_percent")||!strcmp(q->key,"berm_blowout_percent")||!strcmp(q->key,"exposed_base_percent")||!strcmp(q->key,"crust_percent")||
+           !strcmp(q->key,"puddles_percent")||!strcmp(q->key,"rain_erosion_percent")||!strcmp(q->key,"sand_whoops_percent"))&&!x)snprintf(v->text,100,"%s",TR("<  apagado  >","<  off  >"));
+  else if(!strcmp(q->key,"boot_prints_threshold_percent")&&!x)snprintf(v->text,100,"%s",TR("<  apagado  >","<  off  >"));
   else if(!strcmp(q->key,"wall_angle_deg")&&!x)snprintf(v->text,100,"%s",TR("<  sin tope  >","<  no cap  >"));
   else snprintf(v->text,100,"<  %d %s  >",x,q->unit);}
  if(menu_tab==4){const float y=menu_row_y(rows)+.003f;
@@ -373,7 +395,13 @@ API void Draw(int state,int *quads,void **quad_data,int *strings,void **string_d
  DWORD pid=0;HWND front=GetForegroundWindow();const int ours=front&&GetWindowThreadProcessId(front,&pid)&&pid==GetCurrentProcessId();
  if(!ours){memset(menu_down,1,sizeof(menu_down));return;} /* keys held while away never count as presses */
  if(menu_edge(VK_F8)){menu_open=!menu_open;menu_typing=0;if(menu_open){menu_load();menu_presets_scan();memset(menu_down,1,sizeof(menu_down));menu_down[VK_F8]=1;}}
- if(!menu_open)return;
+ if(!menu_open){ /* fork: a small line while a wave / crew job / soaking runs, so nothing changes out of nowhere */
+  const LONG kind=ra_job_kind,pct=ra_job_pct;if(!kind||!ra_session)return;menu_nq=menu_ns=0;
+  static const char *const es[6]={"","Reseteando la pista","Alisando la pista","Niveladora en tu linea","Regador en tu linea","La tierra se esta mojando"};
+  static const char *const en[6]={"","Resetting the track","Smoothing the track","Grader on your line","Water truck on your line","The soil is soaking up water"};
+  MenuString *m=menu_text(.03f,.93f,0,0xFFE8E8E8ul);
+  if(kind==5)snprintf(m->text,100,"%s...",menu_lang?en[5]:es[5]);else snprintf(m->text,100,"%s  %ld %%",menu_lang?en[kind<6?kind:0]:es[kind<6?kind:0],(long)pct);
+  *quads=0;*quad_data=menu_quads;*strings=menu_ns;*string_data=menu_strings;return;}
  menu_status();
  int hover=-1;menu_nq=menu_ns=0;menu_cursor=0;
  if(menu_typing)menu_type();else{menu_keys();menu_mouse(&hover);}

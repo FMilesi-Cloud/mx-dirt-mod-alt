@@ -4,6 +4,8 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <wchar.h>
 /* GL enums beyond the 1.1 header. */
 enum {
  X_TEXTURE0=0x84c0,X_ACTIVE_TEXTURE=0x84e0,X_CURRENT_PROGRAM=0x8b8d,X_SAMPLER_BINDING=0x8919,
@@ -26,16 +28,16 @@ enum {
 #endif
 #define FN(ret,name,args) ret(APIENTRY *name)args
 enum { GRID_VERTICES=(MXDIRT_CELLS+1)*(MXDIRT_CELLS+1), GRID_INDICES=MXDIRT_CELLS*MXDIRT_CELLS*6 };
-/* Texture units: 0 heights, 1 native colour snapshot, 2 clods, 3 sim state, 4 soft layer, 5 soft tile occupancy. */
-enum { UNITS=6 };
+/* Texture units: 0 heights, 1 native colour snapshot, 2 clods, 3 sim state, 4 soft layer, 5 soft tile occupancy, 6 sim state 2 (fork: water, crust, bare base). */
+enum { UNITS=7 };
 /* Soft layer window: SOFT_SIDE^2 texels in SOFT_SLOTS^2 tile slots, slot = tile index mod SOFT_SLOTS. */
 /* fork: 128 slots (102 m) instead of 64 (51 m): the loose layer no longer pops in ~35 m ahead. Keep in step with
    MXDIRT_SOFT_SIDE / MXDIRT_SOFT_SLOT_MASK in mxdirt_dirt_shader.h. */
 enum { SOFT_TILE=32,SOFT_SLOTS=128,SOFT_SIDE=SOFT_TILE*SOFT_SLOTS };
 _Static_assert(SOFT_SIDE==MXDIRT_SOFT_SIDE&&SOFT_SLOTS-1==MXDIRT_SOFT_SLOT_MASK,"soft window size");
-enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,
+enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,U_STATE2,
  U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_SOFT_OCC,U_SOFT_TILE,U_SHIFT,U_RELIEF,U_RAMP,U_SOFT_LIFT,U_COUNT };
-static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on",
+static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on","state2",
  "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode","soft_occ","soft_tile","shift","relief","ramp","soft_lift"};
 /* Bindings this pass changes and must hand back unchanged. */
 typedef struct {GLint program,active,unpack_buffer,unpack[6],texture[UNITS],sampler[UNITS];} SavedBindings;
@@ -44,8 +46,8 @@ struct MxDirtGl {
  HGLRC context;DWORD thread;uint64_t generation;
  /* program[0] colour, program[1] the depth-only tyre-sink draw (same source with SINK defined; a uniform it
     does not use has location -1, which glUniform ignores). */
- GLuint program[2],vao,vbo,ibo,heights,background,clods,state,soft,occ,linear,nearest,mipped,wrapped;
- GLint width,height,uniform[2][U_COUNT];int heights_ready,clods_ready,state_ready,soft_ready,occ_ready;
+ GLuint program[2],vao,vbo,ibo,heights,background,clods,state,soft,occ,state2,linear,nearest,mipped,wrapped;
+ GLint width,height,uniform[2][U_COUNT];int heights_ready,clods_ready,state_ready,soft_ready,occ_ready,state2_ready;
  /* Soft tile occupancy: slot_data = the slot's tile has soil data (was ever touched); the texture holds it
     widened by one slot each way (the window wraps, so does this). occ_fast: the layer's dimensions allow the
     untouched shortcut at all (else every slot reads as touched). */
@@ -82,6 +84,7 @@ struct MxDirtGl {
  FN(void,gen_framebuffers,(GLsizei,GLuint*));FN(void,delete_framebuffers,(GLsizei,const GLuint*));FN(void,framebuffer_texture,(GLenum,GLenum,GLenum,GLuint,GLint));
  FN(GLenum,framebuffer_status,(GLenum));FN(void,blit,(GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLbitfield,GLenum));
  FN(void,gen_queries,(GLsizei,GLuint*));FN(void,delete_queries,(GLsizei,const GLuint*));FN(void,query_counter,(GLuint,GLenum));FN(void,query_u64,(GLuint,GLenum,uint64_t*));
+ struct CrewGl *crew; /* fork: track crew models (mxdirt_crew_gl.inc), made on first use */
 };
 static int owner(const MxDirtGl *p){return p&&p->context&&p->context==wglGetCurrentContext()&&p->thread==GetCurrentThreadId();}
 static void toggle(GLenum key,GLboolean v){if(v)glEnable(key);else glDisable(key);}
@@ -111,13 +114,22 @@ static GLuint make_sampler(MxDirtGl *p,GLint min,GLint mag,GLint wrap,GLfloat an
  if(anisotropy>1.f)p->sampler_f(s,X_MAX_ANISOTROPY,anisotropy);
  return s;
 }
+#include "mxdirt_crew_gl.inc"
+static void crew_destroy(MxDirtGl *p){
+ struct CrewGl *g=p->crew;if(!g)return;
+ for(int k=0;k<CREW_MODELS;k++){CrewModel *c=g->model+k;
+  for(uint32_t i=0;i<c->m.parts;i++)if(c->tex[i]){GLuint t=c->tex[i];glDeleteTextures(1,&t);for(uint32_t j=i;j<c->m.parts;j++)if(c->tex[j]==t)c->tex[j]=0;}
+  if(c->vbo&&p->delete_buffers)p->delete_buffers(1,&c->vbo);if(c->vao&&p->delete_vao)p->delete_vao(1,&c->vao);mxc_free(&c->m);}
+ if(g->fx_vbo&&p->delete_buffers)p->delete_buffers(1,&g->fx_vbo);if(g->fx_vao&&p->delete_vao)p->delete_vao(1,&g->fx_vao);
+ if(g->prog&&p->delete_program)p->delete_program(g->prog);if(g->fx&&p->delete_program)p->delete_program(g->fx);free(g);p->crew=NULL;
+}
 int mxdirt_gl_destroy(MxDirtGl *p){
  if(!p)return 1;if(!owner(p))return 0;GLint program=0,vao=0,buffer=0;glGetIntegerv(X_CURRENT_PROGRAM,&program);glGetIntegerv(X_VERTEX_ARRAY_BINDING,&vao);glGetIntegerv(X_ARRAY_BUFFER_BINDING,&buffer);
  if((p->program[0]&&program==(GLint)p->program[0])||(p->program[1]&&program==(GLint)p->program[1])||(p->vao&&vao==(GLint)p->vao)||(p->vbo&&buffer==(GLint)p->vbo))return 0;
  if(p->resolve_fbo&&p->delete_framebuffers)p->delete_framebuffers(1,&p->resolve_fbo);
  if(p->timer[0]&&p->delete_queries)p->delete_queries(2,p->timer);
- free(p->stage);
- GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ};for(unsigned k=0;k<UNITS;k++)if(textures[k])glDeleteTextures(1,textures+k);
+ crew_destroy(p);free(p->stage);
+ GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ,p->state2};for(unsigned k=0;k<UNITS;k++)if(textures[k])glDeleteTextures(1,textures+k);
  GLuint samplers[4]={p->linear,p->nearest,p->mipped,p->wrapped};for(unsigned k=0;k<4;k++)if(samplers[k]&&p->delete_samplers)p->delete_samplers(1,samplers+k);
  for(unsigned k=0;k<2;k++)if(p->program[k]&&p->delete_program)p->delete_program(p->program[k]);if(p->vao&&p->delete_vao)p->delete_vao(1,&p->vao);
  GLuint buffers[2]={p->vbo,p->ibo};for(unsigned k=0;k<2;k++)if(buffers[k]&&p->delete_buffers)p->delete_buffers(1,buffers+k);
@@ -172,7 +184,7 @@ int mxdirt_gl_create(MxDirtGl **out,uint64_t generation){
  /* Names only; storage is allocated inside the draw scope after unpack state
     has been normalized. Binding once makes each name a GL_TEXTURE_2D. */
  gl_stage=7;GLint previous_texture=0;glGetIntegerv(GL_TEXTURE_BINDING_2D,&previous_texture);GLuint names[UNITS]={0};glGenTextures(UNITS,names);
- p->heights=names[0];p->background=names[1];p->clods=names[2];p->state=names[3];p->soft=names[4];p->occ=names[5];
+ p->heights=names[0];p->background=names[1];p->clods=names[2];p->state=names[3];p->soft=names[4];p->occ=names[5];p->state2=names[6];
  for(unsigned k=0;k<UNITS;k++)if(!names[k]){glBindTexture(GL_TEXTURE_2D,(GLuint)previous_texture);goto fail;}
  for(unsigned k=0;k<UNITS;k++)glBindTexture(GL_TEXTURE_2D,names[k]);glBindTexture(GL_TEXTURE_2D,(GLuint)previous_texture);
  gl_stage=8;cells=malloc(sizeof(float)*2*GRID_VERTICES);indices=malloc(sizeof(uint32_t)*GRID_INDICES);if(!cells||!indices)goto fail;
@@ -235,7 +247,7 @@ static void soft_update(MxDirtGl *p,const MxDirtSoftInput *s,const float *modelv
  }
  out[0]=(float)tx0*tile_m;out[1]=(float)tz0*tile_m;out[2]=out[0]+SOFT_SLOTS*tile_m;out[3]=out[1]+SOFT_SLOTS*tile_m;
 }
-int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow *w,const MxDirtLook *look,const MxDirtState *state,const MxDirtSoftInput *soft){
+int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow *w,const MxDirtLook *look,const MxDirtState *state,const MxDirtSoftInput *soft,const MxDirtCrewInput *crew){
  if(!owner(p)||!scope||!w||!w->texels||!look||scope->generation!=p->generation||scope->thread!=p->thread||scope->context!=p->context)return -1;
  if(!scope->serial||!scope->complete)return 0;
  if(w->shift_x>=(uint32_t)MXDIRT_SIDE||w->shift_z>=(uint32_t)MXDIRT_SIDE)return -1;
@@ -276,7 +288,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
  const GLint draw_fbo=p->cache.draw_fbo,read_fbo=p->cache.read_fbo,draw_buffer=p->cache.draw_buffer,*viewport=p->cache.viewport,vao=p->cache.vao,buffer=p->cache.buffer,*blend=p->cache.blend,depthfunc=p->cache.depthfunc,*polygon=p->cache.polygon;
  const GLboolean *color=p->cache.color,write=p->cache.write,*enabled=p->cache.enabled,blend_enabled=p->cache.blend_enabled,srgb=p->cache.srgb;const GLfloat offset_factor=p->cache.offset_factor,offset_units=p->cache.offset_units;
  const SavedBindings *saved=&p->cache.saved;
- const GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ},samplers[UNITS]={p->wrapped,p->nearest,p->mipped,p->wrapped,p->wrapped,p->nearest}; /* heights and state are toroidal like the soft window */
+ const GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ,p->state2},samplers[UNITS]={p->wrapped,p->nearest,p->mipped,p->wrapped,p->wrapped,p->nearest,p->wrapped}; /* heights and state are toroidal like the soft window */
  const int timed=check&&p->timer[0];
  if(timed){if(p->timing){uint64_t a=0,b=0;p->query_u64(p->timer[0],0x8866,&a);p->query_u64(p->timer[1],0x8866,&b);if(b>=a){p->gpu_ms=(double)(b-a)*1e-6;p->gpu_fresh=1;}}
   p->query_counter(p->timer[0],0x8e28);p->timing=1;}
@@ -287,7 +299,11 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   GLint width=0;glGetTexLevelParameteriv(GL_TEXTURE_2D,0,GL_TEXTURE_WIDTH,&width);if(width!=MXDIRT_CLOD_SIDE)goto restore;p->clods_ready=1;}
  /* Unit3 per-texel sim state; same layout as the heights. Neutral = untouched. */
  p->active_texture(X_TEXTURE0+3);
+ MxDirtDirty dirty2;if(state_on)dirty2=*state->dirty; /* the same rectangles, for the second state texture */
  if(!upload(&p->state_ready,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE,state_on?state->rgba:NULL,4,state_on?state->dirty:NULL,p->stage))goto restore;
+ p->active_texture(X_TEXTURE0+6);
+ if(!upload(&p->state2_ready,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE,state_on&&state->rgba2?state->rgba2:NULL,4,state_on&&state->rgba2?&dirty2:NULL,p->stage))goto restore;
+ p->active_texture(X_TEXTURE0+3);
  /* Unit4 soft layer window: neutral once, then only tiles that entered the window or changed. */
  p->active_texture(X_TEXTURE0+4);float soft_window[4]={0,0,0,0};
  if(!p->soft_ready){unsigned char *n=malloc((size_t)SOFT_SIDE*SOFT_SIDE*2);if(!n)goto restore;
@@ -363,7 +379,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   p->u3f(u[U_TEXEL0],w->texel0[0],w->texel0[1],w->texel0[2]);p->u3f(u[U_CAMERA],w->camera[0],w->camera[1],w->camera[2]);
   p->u2f(u[U_SPACING],w->spacing_x,w->spacing_z);p->u1f(u[U_HEIGHT_SCALE],w->height_scale);p->u2f(u[U_FADE],look->fade_start,look->fade_end);
   p->u4f(u[U_BOUNDS],w->bounds[0],w->bounds[1],w->bounds[2],w->bounds[3]);p->u1f(u[U_STRENGTH],look->strength);p->u1f(u[U_LOOSE],look->base_loose);
-  p->ui(u[U_STATE],3);p->ui(u[U_STATE_ON],state_on);
+  p->ui(u[U_STATE],3);p->ui(u[U_STATE_ON],state_on);p->ui(u[U_STATE2],6);
   p->ui(u[U_SOFT],4);p->ui(u[U_SOFT_ON],soft_on);
   p->u2f(u[U_SOFT_ORIGIN],soft_on?soft->origin_x:0.f,soft_on?soft->origin_z:0.f);
   p->u4f(u[U_SOFT_WINDOW],soft_window[0],soft_window[1],soft_window[2],soft_window[3]);
@@ -387,6 +403,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   int j0=(int)floorf((z0-w->texel0[2])/w->spacing_z)-MXDIRT_MARGIN-1,j1=(int)ceilf((z1-w->texel0[2])/w->spacing_z)-MXDIRT_MARGIN+1;
   if(j0<0)j0=0;if(j1>MXDIRT_CELLS)j1=MXDIRT_CELLS;
   if(j1>j0)glDrawElements(GL_TRIANGLES,(GLsizei)((j1-j0)*MXDIRT_CELLS*6),GL_UNSIGNED_INT,(void*)((size_t)j0*MXDIRT_CELLS*6*sizeof(uint32_t)));}
+ if(crew&&crew->kind){p->active_texture(X_TEXTURE0);crew_draw(p,scope,w,crew);} /* fork: the track crew, on the ground just drawn */
 restore:
  if(blend_enabled)p->enable_indexed(GL_BLEND,0);else p->disable_indexed(GL_BLEND,0);p->blend(0,(GLenum)blend[0],(GLenum)blend[1],(GLenum)blend[2],(GLenum)blend[3]);p->equation(0,(GLenum)blend[4],(GLenum)blend[5]);p->color(0,color[0],color[1],color[2],color[3]);
  for(unsigned k=0;k<8;k++)toggle(caps[k],enabled[k]);toggle(X_FRAMEBUFFER_SRGB,srgb);glPolygonOffset(offset_factor,offset_units);glDepthFunc((GLenum)depthfunc);glDepthMask(write);

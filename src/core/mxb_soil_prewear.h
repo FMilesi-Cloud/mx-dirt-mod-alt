@@ -49,8 +49,10 @@ static inline float mxb_pw_base(const MxbSoilSim *s,float X,float Z){
     if(i<0||j<0||i>=(int)s->size-1||j>=(int)s->size-1)return 0.f;float fc=c-(float)i,fr=r-(float)j;size_t k=(size_t)j*s->size+i;
     return (s->base[k]+(s->base[k+1]-s->base[k])*fc)*(1.f-fr)+(s->base[k+s->size]+(s->base[k+s->size+1]-s->base[k+s->size])*fc)*fr;
 }
+/* fork: mix = share of 125 / 250 / 450 riders in the gate (NULL: all ride like the tuned 250-450 average). A 125 is
+   lighter and pulls less (less load, less wheelspin, a slightly quicker bounce); a 450 the other way. */
 static inline uint64_t mxb_soil_prewear(MxbSoilSim *m,const MxbDirtGhostLap *laps,unsigned count,unsigned riders,
-    float spread,float clip,float depth_k,uint32_t seed,unsigned char *uni,int box[4]){
+    float spread,float clip,float depth_k,uint32_t seed,unsigned char *uni,int box[4],const float mix[3]){
     /* v7.6 two-mode suspension (Maryland Pro bump catalogue along the user's laps):
        - body mode: the chassis pitching/bouncing. Pro's main bump is a long roller
          3.4 m apart at 12 m/s, 4.4 m at 21 m/s (spacing grows with speed, ~3.6->4.9 Hz),
@@ -87,6 +89,9 @@ static inline uint64_t mxb_soil_prewear(MxbSoilSim *m,const MxbDirtGhostLap *lap
            rows from different riders differ in spacing, cross and break into moguls as on Pro
            (v9: only a little: wide spread made moguls where Pro has rows straight across the band) */
         float fk=1.f+.05f*mxb_pw_normal(&st);if(fk<.75f)fk=.75f;if(fk>1.3f)fk=1.3f;
+        float cls_load=1.f,cls_pull=1.f;
+        if(mix){const float u=mxb_pw_rand(&st);const int c=u<mix[0]?0:u<mix[0]+mix[1]?1:2;
+            static const float L[3]={.86f,.97f,1.08f},Pu[3]={.72f,.92f,1.22f},F[3]={1.06f,1.f,.97f};cls_load=L[c];cls_pull=Pu[c];fk*=F[c];}
         struct{float y,zb,zbd,zh,zhd;MxbBumpSit sit;int valid;}b[2];memset(b,0,sizeof(b));b[0].sit.since=b[1].sit.since=100.f;m->has_last[0]=m->has_last[1]=0;
         for(uint32_t i=0;i<g->h.samples;){
             mxb_soil_sim_begin(m);
@@ -109,7 +114,7 @@ static inline uint64_t mxb_soil_prewear(MxbSoilSim *m,const MxbDirtGhostLap *lap
                 /* each rider gets on and off the gas at its own spot (+-~1 m) and with its own
                    aggression - the whole gate spinning at your exact spot dug exit holes */
                 const MxbDirtGhostSample *ps=p;{long jj=(long)i+shift;if(jj>=0&&jj<(long)g->h.samples&&g->s[jj].wheel==p->wheel)ps=g->s+jj;}
-                float slip_long=ps->slip_long*(ps->slip_long<0.f?aggr:1.f),slip_lat=ps->slip_lat*slide_k;
+                float slip_long=ps->slip_long*(ps->slip_long<0.f?aggr*cls_pull:1.f),slip_lat=ps->slip_lat*slide_k;
                 int landed=p->t-lastt[w]>.2f&&lastt[w]>-50.f; /* came back from the air */lastt[w]=p->t;
                 if(landed)m->has_last[w]=0; /* soft touchdown (sim cuts 30 %) */
                 if(landed)b[w].sit.since=0.f;
@@ -130,8 +135,8 @@ static inline uint64_t mxb_soil_prewear(MxbSoilSim *m,const MxbDirtGhostLap *lap
                     /* braking bumps run deep (Pro: ~2x the rollers elsewhere): troughs may sit
                        up to ~9 cm below the smoothed ground under full braking, 4 cm otherwise */
                     tb=(.04f+bf*(1.f+0.f)*brk)*dnk*fminf(ef,1.3f);pbrk=fmaxf(brk,drive);}
-                MxbSoilSimWheel q;memset(&q,0,sizeof(q));q.x=X/nm;q.z=Z/nm;q.fwd[0]=p->fwd[0];q.fwd[1]=p->fwd[1];q.lat[0]=p->lat[0];q.lat[1]=p->lat[1];
-                q.speed=p->speed;q.slip_long=slip_long;q.slip_lat=slip_lat;q.load=p->load;q.width=p->width;q.radius=p->radius;
+                MxbSoilSimWheel q;memset(&q,0,sizeof(q));q.drive=1.f; /* fork: virtual riders ride, never the gentle pushed print */q.x=X/nm;q.z=Z/nm;q.fwd[0]=p->fwd[0];q.fwd[1]=p->fwd[1];q.lat[0]=p->lat[0];q.lat[1]=p->lat[1];
+                q.speed=p->speed;q.slip_long=slip_long;q.slip_lat=slip_lat;q.load=p->load*cls_load;q.width=p->width;q.radius=p->radius;
                 /* v8.9: riders landing short / rolling a jump pack and wear the gap but build no bump rows
                    there (their rows made sharp-edged mogul blocks under jumps; Pro is clean there) */
                 if(p->pad[0]){gain=1.f;bias=0.f;}

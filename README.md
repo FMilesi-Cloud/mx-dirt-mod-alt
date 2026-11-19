@@ -5,7 +5,7 @@
 > Versión alternativa de **[MX Dirt Mod](https://github.com/kadenball/mx-dirt-mod)** de **kadenball** para MX Bikes.
 > An alternative version of **[MX Dirt Mod](https://github.com/kadenball/mx-dirt-mod)** by **kadenball** for MX Bikes.
 
-![license](https://img.shields.io/badge/license-GPL--3.0-blue) ![base](https://img.shields.io/badge/based%20on-MX%20Dirt%20Mod%201.7.1-8a5a2b) ![game](https://img.shields.io/badge/MX%20Bikes-Steam%20build%2023566986-555)
+![license](https://img.shields.io/badge/license-GPL--3.0-blue) ![base](https://img.shields.io/badge/based%20on-MX%20Dirt%20Mod%201.7.1-8a5a2b) ![version](https://img.shields.io/badge/version-1.7.1--alt.2-2b7a8a) ![game](https://img.shields.io/badge/MX%20Bikes-Steam%20build%2023566986-555)
 
 ---
 
@@ -43,6 +43,40 @@ Todo el mérito del sistema de tierra (simulación del suelo, publicación en el
 | **Compatibilidad con Graphics Overhaul** | El render se encadena sobre los hooks de OpenGL de Overhaul en vez de apagarse, y se vuelve a enganchar en la carga siguiente. | Con Overhaul instalado el render no dibujaba nada. |
 | **Capa blanda más larga** | Ventana de 102 m (antes 51 m) centrada 25 m adelante. | El detalle aparecía de golpe a ~35 m. |
 | **Logs que sobreviven a un crash** | Se guardan cada 10 s; estado del mod y ms de CPU/GPU en el menú. | Antes un crash borraba todo lo que había pasado. |
+
+### Novedades (alt.2)
+
+| Área | Qué hace |
+|---|---|
+| Huella según la tracción | Empujada o remando a paso de hombre la rueda apenas aplasta; acelerando corta y tira tierra atrás. |
+| Marcas de botas | Remando sentado, el pie deja la suela marcada al costado (más honda en barro). |
+| Pre-wear por cilindrada | El desgaste inicial mezcla 125 / 250 / 450 según la categoría (MX1, MX2, MX3, MXE). |
+| Marcas de caída | La moto que se desliza caída cava un surco que se angosta al frenar. |
+| Bermas que revientan | La tierra suelta de una berma cede si la fuerza lateral (velocidad × giro) le gana. |
+| Base dura que aflora | Donde los surcos llegan a la base, queda pelada: más dura, más oscura, con más vibración. |
+| Costra seca | La tierra compactada y seca que nadie pisa forma costra con grietas; la rueda la rompe en terrones. |
+| Charcos y erosión | La lluvia (Overhaul o el clima del juego) se junta en los surcos (barro) y baja por las pendientes llevándose tierra. |
+| Whoops de arena | En rectas de arena crecen whoops regulares vuelta a vuelta. |
+| Labios realistas (opcional) | Los labios se gastan y forman kicker; los aterrizajes cortos cavan pozos. Apagado por defecto. |
+| Cuadrilla de pista | Niveladora y camión regador en 3D que recorren tu línea grabada y alisan o riegan detrás. Ruedas que giran, sombra y rocío. |
+| Animaciones | Resetear y alisar avanzan como una ola desde la moto; el riego moja de a poco; una línea en pantalla muestra el avance. Se pueden saltar ("Saltar animaciones"). |
+
+**Máquinas 3D.** El mod trae sus propios modelos low-poly (niveladora y camión regador, hechos para este proyecto, GPL-3.0). Si querés usar modelos de la comunidad, convertilos con `tools/crew_export.py` (Blender) y ponelos en `plugins\mx_dirt_data\crew\community\dozer` y `...\truck`; el F8 deja elegir. Probado con el **J9 Bull Dozer** de [Jason9](https://mxb-mods.com/j9-bull-dozer/) y el **Water/Dump Truck v1** de [RedRider197](https://mxb-mods.com/water-dump-truck-v1/). Esos modelos **no se incluyen** en este repo: son de sus autores, bajalos de sus páginas.
+
+### Rendimiento comparado con el original
+
+Mismo recorrido sintético para las dos versiones (`tests/bench_sim.c`): grilla de 2048 sobre 600 m, una moto girando un óvalo de 520 m durante 60 s a 50 Hz, frenando en las curvas y patinando a la salida; después, un pre-wear de 50 pilotos. Medido en una notebook con RTX 3050, compilado con `zig cc -O2`, promedio de 3 corridas.
+
+| Por paso (50 por segundo) | Original 1.7.1 | Alt.2 |
+|---|---|---|
+| Simulación del suelo (2 ruedas + avalanchas) | 0,036 ms | 0,039 ms |
+| Capa blanda (huella visible) | 0,054 ms | 0,054 ms |
+| Clima: costra, charcos, erosión (lluvia la mitad del tiempo) | — | 0,036 ms |
+| Marcas de caída y bermas | — | 0,0002 ms |
+| **Total** | **0,090 ms** | **0,129 ms** |
+| Pre-wear de 50 pilotos (una vez al cargar) | 1,54 s | 1,63 s |
+
+En el juego (log de esta versión, 2560×1440): simulación 0,075 ms por paso, conversión de alturas 0,044 ms, pase de render en GPU 2,5 ms de mediana (p90 3,5 ms). Las máquinas 3D suman entre 900 y 6800 triángulos solo mientras están en pista.
 
 ### Correcciones
 
@@ -238,6 +272,40 @@ All the credit for the dirt system (soil simulation, publishing into the game's 
 | **Graphics Overhaul compatibility** | The renderer chains onto Overhaul's OpenGL hooks instead of switching off, and re-hooks on the next load. | With Overhaul installed the renderer drew nothing. |
 | **Longer soft layer** | 102 m window (was 51 m) centred 25 m ahead. | Detail popped in ~35 m ahead. |
 | **Logs that survive a crash** | Saved every 10 s; mod state and CPU/GPU ms in the menu. | A crash used to lose everything. |
+
+### What's new (alt.2)
+
+| Area | What it does |
+|---|---|
+| Print by traction | Pushed or paddled at walking pace the tyre only presses; on the gas it cuts and throws soil back. |
+| Boot prints | Paddling while seated, the boot leaves its sole beside the bike (deeper in mud). |
+| Pre-wear by engine size | The starting wear mixes 125 / 250 / 450 riders by category (MX1, MX2, MX3, MXE). |
+| Crash marks | A bike sliding on its side ploughs a groove that narrows as it stops. |
+| Berm blowouts | Loose soil on a berm gives way when the lateral force (speed × turn rate) beats it. |
+| Bare hard base | Where ruts reach the base it is left bare: harder, darker, more chatter. |
+| Dry crust | Packed dry soil nobody rides grows a cracked crust; tyres break it into clods. |
+| Puddles and erosion | Rain (Overhaul or the game's weather) pools in ruts (mud) and runs downhill carrying soil. |
+| Sand whoops | Regular whoops grow lap after lap on sand straights. |
+| Realistic lips (optional) | Lips wear into kickers, short landings dig holes. Off by default. |
+| Track crew | A 3D grader and water truck drive your recorded line, smoothing or watering behind them. Turning wheels, shadow and spray. |
+| Animations | Reset and smooth spread as a wave from the bike; watering soaks in gradually; an on-screen line shows progress. Can be skipped ("Skip animations"). |
+
+**3D machines.** The mod ships its own low-poly models (grader and water truck, made for this project, GPL-3.0). To use community models, convert them with `tools/crew_export.py` (Blender) into `plugins\mx_dirt_data\crew\community\dozer` and `...\truck`; the F8 menu picks them. Tested with **J9 Bull Dozer** by [Jason9](https://mxb-mods.com/j9-bull-dozer/) and **Water/Dump Truck v1** by [RedRider197](https://mxb-mods.com/water-dump-truck-v1/). Those models are **not included** here: they belong to their authors, get them from their pages.
+
+### Performance against the original
+
+The same synthetic ride for both versions (`tests/bench_sim.c`): a 2048 grid over 600 m, a bike lapping a 520 m oval for 60 s at 50 Hz, braking into turns and spinning out; then a 50-rider pre-wear. Measured on an RTX 3050 laptop, `zig cc -O2`, mean of 3 runs.
+
+| Per step (50 a second) | Original 1.7.1 | Alt.2 |
+|---|---|---|
+| Soil simulation (2 wheels + slumping) | 0.036 ms | 0.039 ms |
+| Soft layer (visible print) | 0.054 ms | 0.054 ms |
+| Weather: crust, puddles, erosion (raining half the time) | — | 0.036 ms |
+| Crash marks and berms | — | 0.0002 ms |
+| **Total** | **0.090 ms** | **0.129 ms** |
+| 50-rider pre-wear (once, on load) | 1.54 s | 1.63 s |
+
+In game (this version's log, 2560×1440): simulation 0.075 ms a step, height conversion 0.044 ms, GPU render pass 2.5 ms median (p90 3.5 ms). The 3D machines add 900 to 6800 triangles only while they are out.
 
 ### Fixes
 

@@ -12,6 +12,7 @@ if(Test-Path $S){ Remove-Item $S -Recurse -Force }
 New-Item -ItemType Directory -Force "$S\plugins","$S\plugins\mx_dirt_data","$S\install","$S\launcher" | Out-Null
 # in-game menu sprite; no font is shipped (see README, "Menu font")
 Copy-Item "$R\data\mx_dirt_data\white.tga" "$S\plugins\mx_dirt_data\"
+Copy-Item -Recurse "$R\data\mx_dirt_data\crew" "$S\plugins\mx_dirt_data\" # fork: the mod's own crew models (community ones are never packaged)
 Copy-Item "$B\mx_dirt.dll" "$S\plugins\mx_dirt.dlo"
 Copy-Item "$B\mx_dirt_render.dll" "$S\plugins\mx_dirt_render.dlo"
 Copy-Item "$R\src\core\mx_dirt.ini","$R\src\render\mx_dirt_render.ini" "$S\plugins\"

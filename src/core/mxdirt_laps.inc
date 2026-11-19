@@ -93,15 +93,25 @@ static void ra_ghost_load(void){
  if(ra_prewear_riders&&want<4)want=4; /* pre-wear rides up to the 4 fastest laps */
  for(unsigned i=0;i<count&&ra_ghost_n<want;i++){char path[MAX_PATH];
   if(snprintf(path,sizeof(path),"%s\\%s",dir,ra_lap_names[i])<(int)sizeof(path)&&mxb_dirt_ghost_load(path,ra_event_track,ra_ghosts+ra_ghost_n))ra_ghost_n++;}
+ /* fork (6): the first loaded lap's rear-wheel line, a point every ~1 m, is the line the track crew follows */
+ if(ra_ghost_n){const MxbDirtGhostLap *g=ra_ghosts;const float nm=(float)ra_config.height.native_metres;uint32_t n=0;
+  float *xz=malloc((size_t)20000*2*sizeof(float));
+  if(xz){for(uint32_t i=0;i<g->h.samples&&n<20000;i++){const MxbDirtGhostSample *p=g->s+i;if(p->wheel!=1)continue;const float x=p->x*nm,z=p->z*nm;
+    if(!isfinite(x)||!isfinite(z))continue;if(n&&hypotf(x-xz[2*n-2],z-xz[2*n-1])<1.f)continue;
+    if(n&&hypotf(x-xz[2*n-2],z-xz[2*n-1])>8.f){if(n>=2)break;n=0;} /* a jump in the recording: keep the first clean run */
+    xz[2*n]=x;xz[2*n+1]=z;n++;}
+   const int ok=n>=50&&mxdirt_session_set_path(ra_session,xz,n);free(xz);
+   if(ra_log){fprintf(ra_log,"{\"kind\":\"crew_line\",\"ok\":%d,\"points\":%u}\n",ok,n);fflush(ra_log);}}}
  /* A track saved after a ride already holds its pre-wear; wear it again only when fresh
     (more than ~300 m2 moved over 1.5 cm = a ridden track; prewear_fresh_only=0 restores stacking) */
  uint64_t saved=ra_prewear_riders?mxdirt_session_saved_wear(ra_session,.015):0;int skip=ra_prewear_fresh_only&&saved>4000;
  if(ra_prewear_riders&&skip&&ra_log){fprintf(ra_log,"{\"kind\":\"prewear\",\"ok\":0,\"skipped\":\"saved_wear\",\"texels\":%llu}\n",(unsigned long long)saved);fflush(ra_log);}
  if(ra_prewear_riders&&!skip){LARGE_INTEGER a,b,f;QueryPerformanceCounter(&a);uint64_t passes=0;
+  float mix[3];ra_prewear_mix(ra_event_category,mix);
   int pw=ra_ghost_n&&mxdirt_session_prewear(ra_session,ra_ghosts,ra_ghost_n<4?ra_ghost_n:4,ra_prewear_riders,
-     (float)ra_prewear_spread_cm/100.f,(float)ra_prewear_clip_cm/100.f,0x9e3779b9u,&passes);
+     (float)ra_prewear_spread_cm/100.f,(float)ra_prewear_clip_cm/100.f,0x9e3779b9u,ra_prewear_by_class?mix:NULL,&passes);
   QueryPerformanceCounter(&b);QueryPerformanceFrequency(&f);
-  if(ra_log){fprintf(ra_log,"{\"kind\":\"prewear\",\"ok\":%d,\"riders\":%u,\"laps\":%u,\"passes\":%llu,\"ms\":%.0f}\n",pw,ra_prewear_riders,ra_ghost_n<4?ra_ghost_n:4,(unsigned long long)passes,(double)(b.QuadPart-a.QuadPart)*1000./(double)f.QuadPart);fflush(ra_log);}}
+  if(ra_log){fprintf(ra_log,"{\"kind\":\"prewear\",\"ok\":%d,\"riders\":%u,\"laps\":%u,\"passes\":%llu,\"ms\":%.0f,\"category\":\"%s\",\"mix_125_250_450\":[%.2f,%.2f,%.2f]}\n",pw,ra_prewear_riders,ra_ghost_n<4?ra_ghost_n:4,(unsigned long long)passes,(double)(b.QuadPart-a.QuadPart)*1000./(double)f.QuadPart,ra_prewear_by_class?ra_event_category:"off",ra_prewear_by_class?mix[0]:0.,ra_prewear_by_class?mix[1]:1.,ra_prewear_by_class?mix[2]:0.);fflush(ra_log);}}
  unsigned live=ra_ghost_n<ra_ghost_riders?ra_ghost_n:ra_ghost_riders;
  int ok=live?mxdirt_session_set_ghosts(ra_session,ra_ghosts,live):1;
  if(ra_log){fprintf(ra_log,"{\"kind\":\"ghost_riders\",\"requested\":%u,\"folder\":\"%s\",\"files\":%u,\"loaded\":%u,\"accepted\":%d",ra_ghost_riders,source,count,ra_ghost_n,ok);

@@ -52,8 +52,40 @@ int mxdirt_session_set_rut_width(MxdirtSession *,float width_cm,float out[3]); /
 int mxdirt_session_terrain_op(MxdirtSession *,int op);
 /* fork: the bike's own tyre widths (m), rear KnobsFactor and SlipSinkage; 0 = default. Owner. */
 int mxdirt_session_set_tyres(MxdirtSession *,const float width[2],float knobs_rear,float slip_sinkage);
-/* fork: rider brake inputs 0..1 (front, rear) from telemetry for the next step; zeros when unknown. */
-void mxdirt_session_set_inputs(MxdirtSession *,const float brake[2]);
+/* fork: rider brake inputs 0..1 (front, rear) and throttle (0..1, <0 unknown) from telemetry for the next step. */
+void mxdirt_session_set_inputs(MxdirtSession *,const float brake[2],float throttle);
+/* fork: how much a slow undriven wheel marks less, 0..100 % (live). */
+int mxdirt_session_set_gentle(MxdirtSession *,float percent);
+/* fork: boot prints: wheel-load dip that means a foot down, 0..50 % (0 = off), live. */
+int mxdirt_session_set_boots(MxdirtSession *,float threshold_percent);
+/* fork, phases 3-6: 0..300 % each (100 = as tuned, 0 = off); lips_realistic 0/1. Live. */
+typedef struct {float exposed_percent,crust_percent,puddles_percent,erosion_percent,whoops_percent,lips_realistic;} MxdirtPhases;
+int mxdirt_session_set_phases(MxdirtSession *,const MxdirtPhases *);
+/* fork: rain on the track 0..1 (Overhaul's wet track / the game's weather), for the next steps. */
+void mxdirt_session_set_rain(MxdirtSession *,float rain);
+/* fork: the recorded lap line (x,z metres from the terrain centre, n points) the track crew follows. Owner. */
+int mxdirt_session_set_path(MxdirtSession *,const float *xz,uint32_t n);
+/* fork: send the crew along that line: 1 grader, 2 water truck (0 if no line); instant = the whole line now. */
+int mxdirt_session_service(MxdirtSession *,int kind,int instant);
+/* fork: the crew machine for the render: kind 0 none, 1 grader, 2 water truck; position (m from the terrain centre),
+   unit heading, speed m/s. */
+int mxdirt_session_crew_pose(const MxdirtSession *,int *kind,float *x,float *z,float fwd[2],float *speed);
+/* fork: reset (1) / smooth (2) as a ~3 s wave spreading from the bike (mxdirt_session_terrain_op does it at once). */
+int mxdirt_session_terrain_wave(MxdirtSession *,int op);
+/* fork: ease the soil moisture to percent over seconds (0 = at once). */
+int mxdirt_session_ease_moisture(MxdirtSession *,float percent,float seconds);
+typedef struct {uint64_t exposed_cells,crust_breaks,weather_visits,water_moves,whoop_frames,jobs_done,puddle_cells,crust_cells;
+    double eroded_m3;float sweep_s,rain,job_m;int job;uint32_t path_points;
+    int wave,moisture_easing;float wave_progress,job_progress;} MxdirtPhaseStats;
+int mxdirt_session_phase_stats(const MxdirtSession *,MxdirtPhaseStats *);
+/* fork: the game's crash flag for the next step (from telemetry): no tyre wear, crash marks instead. */
+void mxdirt_session_set_crashed(MxdirtSession *,int crashed);
+/* fork: crash marks 0..200 % (0 = off) and how easily berms blow out 0..200 % (0 = never), live. */
+int mxdirt_session_set_events(MxdirtSession *,float crash_percent,float berm_percent);
+/* fork: crashed frames, crash groove metres, berms blown, leaned-into-berm frames by push/hold (<.5, <.8, <1, >=1). */
+int mxdirt_session_event_stats(const MxdirtSession *,uint64_t *crash_frames,float *crash_m,uint64_t *blows,uint64_t berm_frames[4]);
+/* fork: boot prints made, steady-ride wheel load (N), walking-pace frames by load dip (<4, <8, <15, >=15 %). */
+int mxdirt_session_boot_stats(const MxdirtSession *,uint64_t *steps,float *load_ref,uint64_t frames[4]);
 /* fork: lean erosion 0..200 % (100 = default), live. */
 int mxdirt_session_set_lean_erosion(MxdirtSession *,float percent);
 /* fork: cap on rut wall steepness in degrees (0 = off), live. */
@@ -84,6 +116,7 @@ typedef struct {
     const uint8_t *comp;const float *loose;const int8_t *moist;const uint8_t *clods;
     uint32_t size,vertex_exact;float moisture,compaction0;uint64_t steps;
     const uint8_t *print,*print_dir;const int8_t *print_off;
+    const uint8_t *water,*crust,*exposed; /* fork: phases 3-4 (mxb_soil_sim.h) */
 } MxdirtSimView;
 int mxdirt_session_sim_view(const MxdirtSession *,MxdirtSimView *out);
 /* Soft top layer (display only, mxdirt_soft_layer.h): thickness_m 0 = off, else
@@ -117,7 +150,7 @@ int mxdirt_session_remote_state(const MxdirtSession *,double now_s,MxdirtRemoteS
 /* Pre-wear: `riders` virtual riders ride the recorded laps once, synchronously,
    before the first step (spread/clip in metres). Published with the next step. */
 int mxdirt_session_prewear(MxdirtSession *,const MxbDirtGhostLap *laps,unsigned count,unsigned riders,
-    float spread,float clip,uint32_t seed,uint64_t *passes);
+    float spread,float clip,uint32_t seed,const float mix[3],uint64_t *passes); /* fork: mix = 125/250/450 shares, NULL = average */
 /* Vertices of the loaded (saved) deformation beyond min_m metres (0 on a fresh track). */
 uint64_t mxdirt_session_saved_wear(const MxdirtSession *,double min_m);
 /* One wheel-force sample. */

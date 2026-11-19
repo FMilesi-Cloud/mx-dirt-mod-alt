@@ -13,7 +13,7 @@ struct MxDirt {
  MxDirtDirty state_dirty;
  float camera_cell[2];           /* camera in window texels (near box centre) */
  uint16_t texels[S*S*2];
- unsigned char state[S*S*4];
+ unsigned char state[S*S*4],state2[S*S*4]; /* fork: state2 = water, crust, bare base, 0 */
 };
 MxDirt *mxdirt_create(void){return calloc(1,sizeof(MxDirt));}
 void mxdirt_destroy(MxDirt *d){if(d)free(d->band);free(d);}
@@ -186,13 +186,15 @@ static void state_fill(MxDirt *d,const MxDirtWindow *w,const StateMap *q,int32_t
   /* native row j (z up) -> sim row (rows run with -z) */
   int32_t j=w->first_z+r,row=m->vertex_exact?n-1-j:(int32_t)lrint((double)(n-1)-(double)j*(n-1)/(q->grid_height-1));
   if(row<0)row=0;if(row>n-1)row=n-1;
-  unsigned char *line=d->state+(size_t)(((uint32_t)r+w->shift_z)%S)*S*4;size_t base=(size_t)row*n;
+  unsigned char *line=d->state+(size_t)(((uint32_t)r+w->shift_z)%S)*S*4,*line2=d->state2+(line-d->state);size_t base=(size_t)row*n;
+  const uint8_t *wat=m->water?m->water+base:NULL,*cru=m->crust?m->crust+base:NULL,*bare=m->exposed?m->exposed+base:NULL;
   const uint8_t *comp=m->comp+base,*clods=m->clods+base;const float *loose=m->loose+base;const int8_t *moist=m->moist+base;
   for(int32_t c=c0;c<c1;c++){
    const int32_t col=q->cols[c];unsigned char *dst=line+4*(size_t)(((uint32_t)c+w->shift_x)%S);
    float L=loose[col];int lo=L>0.f?(L<.04f?(int)(L*6375.f+.5f):255):0;     /* loose depth / 4 cm */
    int wet=q->mo8+moist[col];wet=wet<0?0:wet>255?255:wet;
    dst[0]=(unsigned char)((q->pk_lut[comp[col]]*(255-lo)+127)/255);dst[1]=(unsigned char)lo;dst[2]=(unsigned char)wet;dst[3]=clods[col];
+   {unsigned char *d2=line2+(dst-line);d2[0]=wat?wat[col]:0;d2[1]=cru?cru[col]:0;d2[2]=bare?bare[col]:0;d2[3]=0;}
   }
  }
  dirty_box(&d->state_dirty,w->shift_x,w->shift_z,c0,c1,r0,r1);
@@ -227,5 +229,5 @@ int mxdirt_state(MxDirt *d,const MxDirtWindow *w,uint32_t grid_width,uint32_t gr
   d->state_valid=1;d->state_x=w->first_x;d->state_z=w->first_z;d->state_src=m->comp;d->state_epoch=d->epoch;
   if(full||stepped){d->state_steps=m->steps;d->state_fresh=1;}
  }
- out->valid=1;out->changed=moved||stepped;out->rgba=d->state;out->dirty=&d->state_dirty;return 1;
+ out->valid=1;out->changed=moved||stepped;out->rgba=d->state;out->rgba2=d->state2;out->dirty=&d->state_dirty;return 1;
 }

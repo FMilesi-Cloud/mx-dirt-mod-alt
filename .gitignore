@@ -8,3 +8,6 @@ build/
 *.log
 __pycache__/
 
+
+# community crew models are their authors' - never committed
+data/mx_dirt_data/crew/community/

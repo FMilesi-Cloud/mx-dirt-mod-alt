@@ -77,7 +77,9 @@ void mxdirt_clods(unsigned char *rgba);
 typedef struct {
  const uint8_t *comp;const float *loose;const int8_t *moist;const uint8_t *clods;
  uint32_t size,vertex_exact;float moisture,compaction0;uint64_t steps;
+ const uint8_t *water,*crust,*exposed; /* fork: phases 3-4, may be NULL */
 } MxDirtSim;
-typedef struct {int valid,changed;const unsigned char *rgba;MxDirtDirty *dirty;} MxDirtState;
+/* rgba2 (fork): water, crust, bare base, 0 - same layout and dirty rectangles as rgba */
+typedef struct {int valid,changed;const unsigned char *rgba,*rgba2;MxDirtDirty *dirty;} MxDirtState;
 int mxdirt_state(MxDirt *,const MxDirtWindow *,uint32_t grid_width,uint32_t grid_height,const MxDirtSim *,MxDirtState *out);
 #endif

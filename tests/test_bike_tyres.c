@@ -11,7 +11,7 @@
 #include "mxdirt_wheel_sample.h"
 #include "mxdirt_session.h"
 static FILE *ra_log;static MxbWheelSampleMetadata ra_meta[2];static MxdirtSession *ra_session;
-void mxdirt_session_set_inputs(MxdirtSession *s,const float brake[2]){(void)s;(void)brake;}
+void mxdirt_session_set_inputs(MxdirtSession *s,const float brake[2],float t){(void)s;(void)brake;(void)t;}
 int mxdirt_session_set_tyres(MxdirtSession *s,const float w[2],float k,float sl){(void)s;(void)w;(void)k;(void)sl;return 1;}
 static int ra_read(void *u,uint64_t a,void *o,size_t n){(void)u;(void)a;(void)o;(void)n;return 0;}
 #include "mxdirt_bike.inc"

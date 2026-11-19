@@ -4,6 +4,8 @@
 #include "mxdirt_session.h"
 #include "mxb_soil_sim.h"
 #include "mxb_soil_prewear.h"
+#include "mxdirt_events.h"
+#include "mxb_soil_weather.h"
 #include "mxb_soil_live_gate.h"
 #include "mxb_soil_live_wear.h"
 #include "mxdirt_soil_evolution.h"
@@ -47,6 +49,19 @@ struct MxdirtSession {
     uint64_t timing_frames,timing_ticks[3],timing_max[3];
     float tyre_width[2];   /* fork: the bike's own tyre widths, m (0 = class default) */
     float brake_in[2];     /* fork: rider brake inputs from telemetry, 0..1 (front, rear) */
+    float throttle_in;     /* fork: throttle from telemetry 0..1, -1 = unknown */
+    float prev_speed[2],drive_est[2]; /* fork: measured pull per wheel (speed gain), smoothed */
+    /* fork: boot prints. Wheel load the bike carries at a steady ride (rider included); a seated rider pushing with a
+       foot takes part of it off the wheels. */
+    float load_ref,boot_threshold;int foot_down,foot_side;float foot_x,foot_z;uint64_t boot_steps,boot_frames[4];
+    MxdEvents ev; /* fork: crash marks and berm blowouts (mxdirt_events.h) */
+    /* fork, phases 4-6: rain 0..1 from the host, weather pass stats; sand whoops (5): a slow body bounce per wheel */
+    float rain;MxbWeatherStats wx;float whoop_gain,whoop_y[2],whoop_z[2],whoop_zd[2];int whoop_ok[2];uint64_t whoop_frames;
+    /* track crew (6): the recorded lap line (metres), the job running along it (1 grader, 2 water truck), how far */
+    float *path;uint32_t path_n,job_at;int job;float job_m,job_len;uint64_t jobs_done;
+    /* fork: animations - reset / smooth wave (wave 1 reset, 2 smooth) spreading from the bike's row, and the
+       moisture easing toward a new value instead of jumping */
+    int wave,wave_row,wave_done;float wave_reach,bike_x,bike_z,moist_target,moist_rate;float path_len;
 };
 static uint64_t qpc_now(void){LARGE_INTEGER t;QueryPerformanceCounter(&t);return (uint64_t)t.QuadPart;}
 static void timing_add(MxdirtSession *s,unsigned k,uint64_t ticks){s->timing_ticks[k]+=ticks;if(ticks>s->timing_max[k])s->timing_max[k]=ticks;}
@@ -113,7 +128,7 @@ static int fresh(const MxdirtSession *s){return owned(s)&&!s->generated_sequence
 void mxdirt_session_destroy(MxdirtSession *s) {
     if(!s||s->in_callback||(s->owner&&s->owner!=GetCurrentThreadId()))return;
     mxdirt_height_field_destroy(s->height);
-    mxb_soil_sim_destroy(s->sim);mxb_soil_destroy(s->soil);free(s->prewear_tiles);mxd_soft_destroy(s->soft);free(s->remote);free(s->remote_mem);
+    mxb_soil_sim_destroy(s->sim);mxb_soil_destroy(s->soil);free(s->prewear_tiles);mxd_soft_destroy(s->soft);free(s->remote);free(s->remote_mem);free(s->path);
     free(s->seed);free(s->target);free(s->accepted);free(s->changes);
     free(s->pending_begin);free(s->pending_end);free(s);
 }
@@ -135,7 +150,7 @@ int mxdirt_session_create(MxdirtSession **out,const MxdirtSessionConfig *c,
     size_t cells=(size_t)c->height.destination_width*c->height.destination_height;
     if(cells>34000000||count<cells||c->sparse_capacity>cells)return 0;
     MxdirtSession *s=calloc(1,sizeof(*s));if(!s)return 0;
-    s->c=*c;s->owner=GetCurrentThreadId();s->cells=cells;s->priming=1;s->rolling_bumps=.6f;mxb_live_gate_init(&s->gate,5,0x51ed270bu);
+    s->c=*c;s->owner=GetCurrentThreadId();s->cells=cells;s->priming=1;s->throttle_in=-1.f;s->boot_threshold=.08f;s->foot_side=1;s->ev.crash_gain=1.f;s->ev.berm_gain=1.f;s->whoop_gain=1.f;s->whoop_gain=1.f;s->rolling_bumps=.6f;mxb_live_gate_init(&s->gate,5,0x51ed270bu);
     s->source_cells=(size_t)c->height.source_width*c->height.source_height;
     s->tile_count=(c->height.source_width/128)*(c->height.source_height/32);
     if(!mxdirt_contact_init(&s->wheel[0],&c->contact,0)||
@@ -240,7 +255,7 @@ int mxdirt_session_terrain_op(MxdirtSession *s,int op){
     for(size_t k=0;k<n;k++)m->h[k]=m->ref;
     if(op==1){memset(m->comp,0,n);memset(m->mat,0,n);memset(m->moist_off,0,n);}
     for(size_t k=0;k<n;k++)m->loose[k]=op==1?0.f:.5f*m->loose[k];
-    memset(m->clods,0,n);memset(m->print,0,n);memset(m->print_dir,0,n);memset(m->print_off,0,n);
+    memset(m->clods,0,n);memset(m->print,0,n);memset(m->print_dir,0,n);memset(m->print_off,0,n);memset(m->crust,0,n);memset(m->exposed,0,n);if(op==1)memset(m->water,0,n); /* fork: phases 3-4 */
     m->has_last[0]=m->has_last[1]=0;
     if(op==1&&s->soil)memset(s->soil->cell,0,(size_t)s->soil->width*s->soil->height*sizeof(*s->soil->cell));
     if(s->soft){MxdSoft *f=s->soft;const size_t ft=(size_t)f->tiles_x*f->tiles_z;
@@ -257,8 +272,89 @@ int mxdirt_session_set_tyres(MxdirtSession *s,const float width[2],float knobs_r
     s->sim->p.slip_sink=isfinite(slip_sinkage)&&slip_sinkage>0.f?fminf(3.f,slip_sinkage):1.f;return 1;
 }
 /* fork: brake inputs from the game's telemetry (0..1 front, rear), for this frame's passes. */
-void mxdirt_session_set_inputs(MxdirtSession *s,const float brake[2]){
+void mxdirt_session_set_inputs(MxdirtSession *s,const float brake[2],float throttle){
     if(!s||!brake)return;for(int w=0;w<2;w++)s->brake_in[w]=isfinite(brake[w])?fmaxf(0.f,fminf(1.f,brake[w])):0.f;
+    s->throttle_in=isfinite(throttle)&&throttle>=0.f?fminf(1.f,throttle):-1.f;
+}
+int mxdirt_session_set_gentle(MxdirtSession *s,float percent){
+    if(!owned(s)||!s->sim||!isfinite(percent)||percent<0.f||percent>100.f)return 0;s->sim->p.gentle_gain=percent/100.f;return 1;
+}
+int mxdirt_session_set_boots(MxdirtSession *s,float threshold_percent){
+    if(!owned(s)||!isfinite(threshold_percent)||threshold_percent<0.f||threshold_percent>50.f)return 0;
+    s->boot_threshold=threshold_percent>0.f?threshold_percent/100.f:2.f;return 1; /* 0 = off (unreachable threshold) */
+}
+void mxdirt_session_set_crashed(MxdirtSession *s,int crashed){if(s)s->ev.crashed=crashed!=0;}
+int mxdirt_session_set_events(MxdirtSession *s,float crash_percent,float berm_percent){
+    if(!owned(s)||!isfinite(crash_percent)||!isfinite(berm_percent)||crash_percent<0.f||crash_percent>200.f||berm_percent<0.f||berm_percent>200.f)return 0;
+    s->ev.crash_gain=crash_percent/100.f;s->ev.berm_gain=berm_percent/100.f;if(!(s->ev.crash_gain>0.f))s->ev.crash_have=0;return 1;
+}
+int mxdirt_session_event_stats(const MxdirtSession *s,uint64_t *crash_frames,float *crash_m,uint64_t *blows,uint64_t berm_frames[4]){
+    if(!s||!crash_frames||!crash_m||!blows||!berm_frames)return 0;
+    *crash_frames=s->ev.crash_frames;*crash_m=s->ev.crash_m;*blows=s->ev.berm_blows;memcpy(berm_frames,s->ev.berm_frames,sizeof(s->ev.berm_frames));return 1;
+}
+int mxdirt_session_set_phases(MxdirtSession *s,const MxdirtPhases *v){
+    if(!owned(s)||!s->sim||!v)return 0;const float *f=&v->exposed_percent;
+    for(unsigned i=0;i<sizeof(*v)/sizeof(float);i++)if(!isfinite(f[i])||f[i]<0.f||f[i]>300.f)return 0;
+    MxbSoilSimParams *p=&s->sim->p;p->exposed_gain=v->exposed_percent/100.f;p->crust_gain=v->crust_percent/100.f;
+    p->water_gain=v->puddles_percent/100.f;p->erosion_gain=v->erosion_percent/100.f;p->lip_real=v->lips_realistic>0.f?1.f:0.f;
+    s->whoop_gain=v->whoops_percent/100.f;
+    if(!(p->water_gain>0.f))memset(s->sim->water,0,(size_t)s->sim->size*s->sim->size);
+    if(!(p->crust_gain>0.f))memset(s->sim->crust,0,(size_t)s->sim->size*s->sim->size);
+    if(!(p->exposed_gain>0.f))memset(s->sim->exposed,0,(size_t)s->sim->size*s->sim->size);
+    return 1;
+}
+void mxdirt_session_set_rain(MxdirtSession *s,float rain){if(s)s->rain=isfinite(rain)?fmaxf(0.f,fminf(1.f,rain)):0.f;}
+int mxdirt_session_set_path(MxdirtSession *s,const float *xz,uint32_t n){
+    if(!owned(s)||!xz||n<2||n>20000)return 0;float *c=malloc((size_t)n*2*sizeof(float));if(!c)return 0;
+    memcpy(c,xz,(size_t)n*2*sizeof(float));free(s->path);s->path=c;s->path_n=n;s->job=0;
+    s->path_len=0.f;for(uint32_t i=1;i<n;i++)s->path_len+=hypotf(c[2*i]-c[2*i-2],c[2*i+1]-c[2*i-1]);return 1;
+}
+static void crew_step(MxdirtSession *s,float dt);
+int mxdirt_session_service(MxdirtSession *s,int kind,int instant){
+    if(!owned(s)||!s->sim||!s->path||s->path_n<2||(kind!=1&&kind!=2))return 0;
+    s->job=kind;s->job_at=0;s->job_m=0.f;s->job_len=0.f;
+    if(instant){mxb_soil_sim_begin(s->sim);crew_step(s,1e9f);mxb_soil_sim_end(s->sim);
+        for(size_t t=0,tn=(size_t)s->sim->tiles_x*s->sim->tiles_y;t<tn;t++)if(s->sim->tiles[t]){
+            unsigned char *all=s->prewear_tiles?s->prewear_tiles:calloc(tn,1);if(!all)break;s->prewear_tiles=all;
+            for(size_t u=0;u<tn;u++)all[u]|=s->sim->tiles[u];break;}} /* published with the next step */
+    return 1;
+}
+/* fork: reset (1) / smooth (2) as a wave from the bike over ~3 s; the loaded surface follows at the end. */
+int mxdirt_session_terrain_wave(MxdirtSession *s,int op){
+    if(!owned(s)||!s->sim||(op!=1&&op!=2))return 0;
+    float c,r;mxb_ss_texel(s->sim,s->bike_x,s->bike_z,&c,&r);(void)c;
+    s->wave=op;s->wave_row=(int)lrintf(r);if(s->wave_row<0)s->wave_row=0;if(s->wave_row>=(int)s->sim->size)s->wave_row=(int)s->sim->size-1;
+    s->wave_reach=0.f;s->wave_done=0;return 1;
+}
+/* fork: ease the soil moisture toward percent over seconds (0 = at once). */
+int mxdirt_session_ease_moisture(MxdirtSession *s,float percent,float seconds){
+    if(!owned(s)||!s->sim||!isfinite(percent)||percent<0.f||percent>100.f||!isfinite(seconds)||seconds<0.f)return 0;
+    const float t=percent/100.f;if(!(seconds>0.f)){s->sim->p.moisture=t;s->moist_rate=0.f;return 1;}
+    s->moist_target=t;s->moist_rate=fabsf(t-s->sim->p.moisture)/seconds;return 1;
+}
+/* fork: where the crew machine is (for the render): position along the line, heading over ~7 m of it, speed */
+int mxdirt_session_crew_pose(const MxdirtSession *s,int *kind,float *x,float *z,float fwd[2],float *speed){
+    if(!s||!kind||!x||!z||!fwd||!speed)return 0;*kind=0;
+    if(!s->job||!s->path||s->path_n<2||s->job_at+1>=s->path_n)return 1;
+    const float *a=s->path+2*s->job_at,*b=a+2;const float seg=hypotf(b[0]-a[0],b[1]-a[1]),t=seg>1e-4f?fminf(1.f,s->job_len/seg):0.f;
+    *x=a[0]+(b[0]-a[0])*t;*z=a[1]+(b[1]-a[1])*t;
+    const uint32_t i0=s->job_at>3?s->job_at-3:0,i1=s->job_at+4<s->path_n?s->job_at+4:s->path_n-1;
+    float fx=s->path[2*i1]-s->path[2*i0],fz=s->path[2*i1+1]-s->path[2*i0+1],fl=hypotf(fx,fz);
+    if(!(fl>1e-3f)){fx=b[0]-a[0];fz=b[1]-a[1];fl=hypotf(fx,fz);}if(!(fl>1e-4f))return 1;
+    fwd[0]=fx/fl;fwd[1]=fz/fl;*speed=s->job==1?8.f:11.f;*kind=s->job;return 1;
+}
+int mxdirt_session_phase_stats(const MxdirtSession *s,MxdirtPhaseStats *o){
+    if(!s||!o||!s->sim)return 0;memset(o,0,sizeof(*o));const MxbSoilSim *m=s->sim;
+    o->wave=s->wave;o->wave_progress=s->wave?fminf(1.f,s->wave_reach/(float)m->size):0.f;
+    o->job_progress=s->job&&s->path_len>0.f?fminf(1.f,s->job_m/s->path_len):0.f;o->moisture_easing=s->moist_rate>0.f;
+    o->exposed_cells=m->exposed_cells;o->crust_breaks=m->crust_breaks;o->eroded_m3=m->eroded_m3;
+    o->weather_visits=s->wx.visits;o->water_moves=s->wx.moved;o->sweep_s=s->wx.last_sweep;o->rain=s->rain;
+    o->whoop_frames=s->whoop_frames;o->job=s->job;o->job_m=s->job_m;o->jobs_done=s->jobs_done;o->path_points=s->path_n;
+    {const size_t n=(size_t)m->size*m->size;uint64_t wet=0,cr=0;for(size_t k=0;k<n;k+=7){wet+=m->water[k]>25;cr+=m->crust[k]>128;}o->puddle_cells=wet*7;o->crust_cells=cr*7;} /* sampled */
+    return 1;
+}
+int mxdirt_session_boot_stats(const MxdirtSession *s,uint64_t *steps,float *load_ref,uint64_t frames[4]){
+    if(!s||!steps||!load_ref||!frames)return 0;*steps=s->boot_steps;*load_ref=s->load_ref;memcpy(frames,s->boot_frames,sizeof(s->boot_frames));return 1;
 }
 int mxdirt_session_set_lean_erosion(MxdirtSession *s,float percent){
     if(!owned(s)||!s->sim||!isfinite(percent)||percent<0.f||percent>200.f)return 0;
@@ -276,7 +372,7 @@ int mxdirt_session_set_rut_width(MxdirtSession *s,float width_cm,float out[3]){
 /* Soft top layer: every real tyre pass (live, extra riders, ghosts, pre-wear)
    presses it; the live gate lines (print_fade 1) are wear only. Pre-wear
    riders (print_fade .65) leave trenches without crisp knob pits. */
-static void soft_contact(void *user,unsigned wheel,const MxbSoilSimWheel *w,float X,float Z,float v,float spin,float skid){
+static void soft_contact(void *user,unsigned wheel,const MxbSoilSimWheel *w,float X,float Z,float v,float spin,float skid,float gentle){
     MxdirtSession *s=user;if(!s||!s->soft||!s->sim||!w||!(w->print_fade<1.f))return;
     /* the dirt sim's ground under the tyre (before this pass cuts it): the layer
        lies deeper on loose soil and a softer track, thinner and ironed flat on
@@ -290,7 +386,7 @@ static void soft_contact(void *user,unsigned wheel,const MxbSoilSimWheel *w,floa
             c+=wgt*mxb_ss_c(m,k);mo+=wgt*mxb_ss_moist(m,k);lo+=wgt*fminf(m->loose[k],.06f);}
         soil.moisture=mo;soil.packed=fminf(1.f,fmaxf(0.f,(c-c0)/.35f));
         soil.thick=soil.thick*fminf(1.3f,fmaxf(.35f,1.f-1.1f*(c-c0)))+5.f*lo;}
-    mxd_soft_stamp(s->soft,wheel==1,X,Z,w->fwd,w->lat,v,w->dt,w->load,spin,skid,w->slip_lat,w->material,w->print_fade<.3f,&soil);
+    mxd_soft_stamp(s->soft,wheel==1,X,Z,w->fwd,w->lat,v,w->dt,w->load,spin,skid,w->slip_lat,w->material,w->print_fade<.3f,&soil,gentle);
 }
 /* Loose soil the sim drops (berms, row crests, roost) fills the layer's trenches and buries prints. */
 static void soft_deposit(void *user,float X,float Z,const float d[2],float a,float b,float w,float volume){
@@ -339,7 +435,8 @@ int mxdirt_session_sim_view(const MxdirtSession *s,MxdirtSimView *v){
     const MxbSoilSim *m=s->sim;
     v->comp=m->comp;v->loose=m->loose;v->moist=m->moist_off;v->clods=m->clods;v->size=m->size;v->vertex_exact=(uint32_t)s->vertex_exact;
     v->moisture=m->p.moisture;v->compaction0=m->p.compaction0;v->steps=m->steps;
-    v->print=m->print;v->print_dir=m->print_dir;v->print_off=m->print_off;return 1;
+    v->print=m->print;v->print_dir=m->print_dir;v->print_off=m->print_off;
+    v->water=m->water;v->crust=m->crust;v->exposed=m->exposed;return 1;
 }
 /* drying_percent: how fast the watered track dries over a ride (0 = never);
    sweep_percent: how strongly tyres push loose soil off a ridden line. */
@@ -385,7 +482,7 @@ static void ghosts_step(MxdirtSession *s,float dt){
             MxbSoilSimWheel w;memset(&w,0,sizeof(w));
             w.x=p->x;w.z=p->z;w.fwd[0]=p->fwd[0];w.fwd[1]=p->fwd[1];w.lat[0]=p->lat[0];w.lat[1]=p->lat[1];
             w.speed=p->speed;w.slip_long=p->slip_long;w.slip_lat=p->slip_lat;w.load=p->load;w.width=p->width;w.radius=p->radius;
-            w.gain=p->gain;w.dt=p->dt;w.valid=1;w.material=p->material;
+            w.gain=p->gain;w.dt=p->dt;w.valid=1;w.material=p->material;w.drive=1.f; /* fork: a recorded lap rides (never the gentle pushed print) */
             unsigned k=p->wheel;
             float lx=m->last_x[k],lz=m->last_z[k],lf=m->last_floor[k];int lh=m->has_last[k];
             m->last_x[k]=s->ghost[i].last_x[k];m->last_z[k]=s->ghost[i].last_z[k];m->last_floor[k]=s->ghost[i].last_floor[k];m->has_last[k]=s->ghost[i].has_last[k];
@@ -435,7 +532,7 @@ static void remotes_step(MxdirtSession *s){
         if(p->rider<0||p->rider>=MXD_REMOTE_MAX||!(fabsf(p->X)<hx)||!(fabsf(p->Z)<hz))continue;
         MxbSoilSimWheel w;memset(&w,0,sizeof(w));const unsigned k=p->wheel?1u:0u;struct MxdRemoteMem *g=s->remote_mem+p->rider;
         w.x=p->X/nm;w.z=p->Z/nm;w.fwd[0]=p->fwd[0];w.fwd[1]=p->fwd[1];w.lat[0]=p->fwd[1];w.lat[1]=-p->fwd[0];
-        w.speed=p->speed;w.slip_long=p->slip_long;w.load=p->load;w.width=k?.15f:.11f;w.radius=k?.33f:.35f;w.gain=1.f;w.dt=p->dt;w.valid=1;
+        w.speed=p->speed;w.slip_long=p->slip_long;w.load=p->load;w.width=k?.15f:.11f;w.radius=k?.33f:.35f;w.gain=1.f;w.drive=1.f; /* fork: a recorded rider rides (never the gentle pushed print) */ w.dt=p->dt;w.valid=1;
         w.material=s->remote_material;w.turn=p->turn;w.brake=p->brake;w.impact=p->impact;w.print_fade=.5f; /* trenches, no crisp knob pits */
         if(p->restart)g->has_last[k]=0;
         float lx=m->last_x[k],lz=m->last_z[k],lf=m->last_floor[k];int lh=m->has_last[k];
@@ -476,14 +573,14 @@ static void sim_to_soil(MxdirtSession *s){
 }
 /* Pre-wear (mxb_soil_prewear.h): a gate of virtual riders on the recorded laps
    before the first step; the worn tiles are published with the next step. */
-int mxdirt_session_prewear(MxdirtSession *s,const MxbDirtGhostLap *laps,unsigned count,unsigned riders,float spread,float clip,uint32_t seed,uint64_t *passes){
+int mxdirt_session_prewear(MxdirtSession *s,const MxbDirtGhostLap *laps,unsigned count,unsigned riders,float spread,float clip,uint32_t seed,const float mix[3],uint64_t *passes){
     if(passes)*passes=0;
     if(!owned(s)||!s->sim||!laps||!count||!riders||riders>400||s->generated_sequence||s->physics_seen||
        !(spread>=0.f)||spread>5.f||!(clip>=0.f)||clip>6.f)return 0;
     for(unsigned i=0;i<count;i++)if(!laps[i].s||!laps[i].h.samples)return 0;
     unsigned char *uni=calloc((size_t)s->sim->tiles_x*s->sim->tiles_y,1);if(!uni)return 0;
     if(s->soft){s->soft->defer_relax=1;s->soft->has_last[0]=s->soft->has_last[1]=0;} /* soft layer settles once at the end */
-    int box[4];uint64_t n=mxb_soil_prewear(s->sim,laps,count,riders,spread,clip,.13f,seed,uni,box); /* .13 of a live pass */
+    int box[4];uint64_t n=mxb_soil_prewear(s->sim,laps,count,riders,spread,clip,.13f,seed,uni,box,mix); /* .13 of a live pass */
     if(s->soft){s->soft->defer_relax=0;s->soft->has_last[0]=s->soft->has_last[1]=0;mxd_soft_relax_all(s->soft,s->sim->p.moisture,2);}
     free(s->prewear_tiles);s->prewear_tiles=uni;s->soil_touched=1;
     if(s->soil&&box[2]>=0)sim_to_soil_rect(s,box[0]-6,box[2]+6,box[1]-6,box[3]+6); /* work history follows the worn area */
@@ -528,12 +625,14 @@ int mxdirt_session_dirt_sim_stats(const MxdirtSession *s,double out[6]){
 static void sim_wheel(const MxdirtSession *s,const MxdirtContact *i,int w,float gain,MxbSoilSimWheel *o){
     memset(o,0,sizeof(*o));float m=(float)s->c.height.native_metres;
     float fl=hypotf(i->forward[0],i->forward[2]),ll=hypotf(i->lateral[0],i->lateral[2]);
-    if(!i->contact||!i->deformation||!(fl>1e-4f)||!(ll>1e-4f))return;
+    if(!i->contact||!i->deformation||s->ev.crashed||!(fl>1e-4f)||!(ll>1e-4f))return; /* fork: a crashed bike leaves crash marks, not tyre wear */
     o->x=i->point[0];o->z=i->point[2];
     o->fwd[0]=i->forward[0]/fl;o->fwd[1]=i->forward[2]/fl;o->lat[0]=i->lateral[0]/ll;o->lat[1]=i->lateral[2]/ll;
     o->speed=fmaxf(0.f,(i->center_velocity[0]*o->fwd[0]+i->center_velocity[2]*o->fwd[1])*m);
     o->slip_long=i->slip[2]*(i->direction<0.f?-1.f:1.f)*m;o->slip_lat=i->slip[0]*m;
     o->load=i->load_n;o->lean=i->lean;
+    /* fork: pull on the rear wheel: the rider's throttle when telemetry is verified, the measured speed gain anyway */
+    o->drive=w?fmaxf(s->drive_est[1],s->throttle_in>=0.f?s->throttle_in:0.f):0.f;
     /* fork: the bike's own wheel radius (read from its wheel definition by mxdirt_wheel_sample), so smaller or
        bigger wheels sink and cut their own footprint; width stays the tyre-class default (not read yet). */
     const float *rv=s->wheel[w].radius_vector_metres;const float rr=sqrtf(rv[0]*rv[0]+rv[1]*rv[1]+rv[2]*rv[2]);
@@ -578,6 +677,87 @@ int mxdirt_session_physics(MxdirtSession *s,int wheel,const MxdirtPhysicsSample 
     if(!owned(s)||wheel<0||wheel>=2||!mxdirt_contact_physics(&s->wheel[wheel],v))return 0;
     s->physics_seen=1;return 1;
 }
+/* fork: boot prints of a seated rider paddling. At walking pace a foot on the ground carries part of the weight, so
+   the two wheels together carry less than at a steady ride: that deficit (above boot_threshold) is a foot down, on
+   the side the bike leans toward. A print at each new foot-down and every ~55 cm while it stays down, by the
+   footpeg (55 cm ahead of the rear contact, 42 cm out). Also packs the soil under it a little: not only a look. */
+static void boots_step(MxdirtSession *s,const MxdirtContact in[2],float dt){
+    if(!s->sim||!(dt>0.f))return;const float m=(float)s->c.height.native_metres;
+    for(int w=0;w<2;w++){ /* measured pull per wheel: speed gain along travel, smoothed (~0.15 s) */
+        const float fx=in[w].forward[0],fz=in[w].forward[2],fl=hypotf(fx,fz);
+        const float v=fl>1e-4f?(in[w].center_velocity[0]*fx+in[w].center_velocity[2]*fz)/fl*m:0.f;
+        const float acc=(v-s->prev_speed[w])/dt;s->prev_speed[w]=v;
+        const float pull=in[w].contact&&isfinite(acc)?fminf(1.f,fmaxf(0.f,acc/3.f)):0.f;
+        s->drive_est[w]+=(pull-s->drive_est[w])*fminf(1.f,dt/.15f);}
+    if(!in[0].contact||!in[1].contact){s->foot_down=0;return;}
+    const float L=in[0].load_n+in[1].load_n,v=.5f*(s->prev_speed[0]+s->prev_speed[1]);
+    if(v>3.f&&v<15.f&&isfinite(L)&&L>100.f)s->load_ref=s->load_ref>0.f?s->load_ref+(L-s->load_ref)*fminf(1.f,dt/2.f):L;
+    if(!(s->load_ref>300.f)||v>=2.5f||!isfinite(L)){s->foot_down=0;return;}
+    const float deficit=1.f-L/s->load_ref;
+    s->boot_frames[deficit<.04f?0:deficit<.08f?1:deficit<.15f?2:3]++; /* calibration: how deep the dips go at walking pace */
+    if(fabsf(in[1].lean)>.015f)s->foot_side=in[1].lean>0.f?1:-1;
+    const int down=deficit>s->boot_threshold&&fabsf(in[1].lean)<.5f;
+    if(!down){s->foot_down=0;return;}
+    const float fx=in[1].forward[0],fz=in[1].forward[2],fl=hypotf(fx,fz),lx=in[1].lateral[0],lz=in[1].lateral[2],ll=hypotf(lx,lz);
+    if(!(fl>1e-4f)||!(ll>1e-4f))return;
+    const float f[2]={fx/fl,fz/fl},side=(float)s->foot_side;
+    const float X=in[1].point[0]*m+f[0]*.55f+lx/ll*side*.42f,Z=in[1].point[2]*m+f[1]*.55f+lz/ll*side*.42f;
+    if(s->foot_down&&hypotf(X-s->foot_x,Z-s->foot_z)<.55f)return;
+    s->foot_down=1;s->foot_x=X;s->foot_z=Z;s->boot_steps++;
+    const float force=deficit*s->load_ref;
+    MxbSoilSim *sm=s->sim;float col,row;mxb_ss_texel(sm,X,Z,&col,&row);const int q=(int)lrintf(col),r=(int)lrintf(row);
+    MxdSoftSoil soil={1.f,sm->p.moisture,0.f};
+    if(q>=0&&r>=0&&q<(int)sm->size&&r<(int)sm->size){const size_t k=(size_t)r*sm->size+(size_t)q;const float c=mxb_ss_c(sm,k),c0=sm->p.compaction0;
+        soil.moisture=mxb_ss_moist(sm,k);soil.packed=fminf(1.f,fmaxf(0.f,(c-c0)/.35f));
+        /* the sole packs its cell a little and presses it ~2-5 mm (damp soil more) */
+        mxb_ss_setc(sm,k,c+.03f*fminf(1.f,force/400.f));mxb_ss_add(sm,q,r,-(.002f+.003f*fminf(1.f,soil.moisture/.6f))*(1.f-soil.packed)*.35f,0);}
+    if(s->soft)mxd_soft_boot(s->soft,X,Z,f,force,&soil);
+}
+/* fork (5): sand whoops. On sand at speed on a straight, the chassis bounces at ~2.2 Hz; where the bounce pushes
+   the wheel down it digs, where it lifts the soil shoved ahead piles up: the same feedback as braking bumps, slower
+   and deeper, so regular whoops grow lap after lap (spacing = speed / bounce rate: ~5 m at 11 m/s). Returns the
+   extra floor bias (m, negative digs) and raises the trough limit. */
+static float whoop_bias(MxdirtSession *s,const MxdirtContact *i,int w,int material,float *bias_floor){
+    const float m=(float)s->c.height.native_metres,y=i->point[1]*m,dt=i->dt,v=hypotf(i->center_velocity[0],i->center_velocity[2])*m;
+    if(!(s->whoop_gain>0.f)||material!=5||!i->contact||!i->deformation||!(dt>0.f)||dt>.1f||!isfinite(y)||v<7.f){s->whoop_ok[w]=0;return 0.f;}
+    if(!s->whoop_ok[w]||fabsf(y-s->whoop_y[w])>.3f){s->whoop_ok[w]=1;s->whoop_y[w]=s->whoop_z[w]=y;s->whoop_zd[w]=0.f;return 0.f;}
+    const float wn=6.2831853f*2.2f,zeta=.22f,y0=s->whoop_y[w],yd=(y-y0)/dt,h=dt/8.f;float z=s->whoop_z[w],zd=s->whoop_zd[w],a=0.f;
+    for(int k=0;k<8;k++){const float yk=y0+(y-y0)*(float)(k+1)/8.f;a=wn*wn*(yk-z)+2.f*zeta*wn*(yd-zd);zd+=a*h;z+=zd*h;}
+    if(!isfinite(z)||fabsf(z-y)>.3f){s->whoop_ok[w]=0;return 0.f;}
+    s->whoop_y[w]=y;s->whoop_z[w]=z;s->whoop_zd[w]=zd;s->whoop_frames++;
+    const float push=fmaxf(-1.f,fminf(1.f,a/9.81f)),drive=w?fmaxf(s->drive_est[1],s->throttle_in>0.f?s->throttle_in:0.f):0.f;
+    *bias_floor=fmaxf(*bias_floor,.12f*fminf(2.f,s->whoop_gain));
+    return -.016f*s->whoop_gain*push*fminf(1.5f,v/12.f)*(1.f+.8f*drive); /* the low side is dug out under power */
+}
+/* fork: animations, once per step: the wave covers ~sim size rows in ~3 s, both ways from the bike's row */
+static void anim_step(MxdirtSession *s,float dt){
+    if(s->moist_rate>0.f){float *m=&s->sim->p.moisture;const float d=s->moist_target-*m,st=s->moist_rate*dt;
+        if(fabsf(d)<=st){*m=s->moist_target;s->moist_rate=0.f;}else *m+=d>0.f?st:-st;}
+    if(!s->wave)return;
+    const int S=(int)s->sim->size,a=(int)s->wave_reach;s->wave_reach+=(float)S/3.f*dt;const int b=(int)fminf((float)S,s->wave_reach);
+    const float f=s->wave==1?0.f:.5f;
+    if(b>a){mxb_soil_wave_rows(s->sim,s->wave_row+a,s->wave_row+b,f,s->wave==1);mxb_soil_wave_rows(s->sim,s->wave_row-b+1,s->wave_row-a+1,f,s->wave==1);}
+    if(b>=S){ /* the loaded surface (wear saved with the track) now, and every tile republished */
+        const size_t tn=(size_t)s->sim->tiles_x*s->sim->tiles_y;unsigned char *all=s->prewear_tiles?s->prewear_tiles:malloc(tn);
+        if(all){memset(all,1,tn);s->prewear_tiles=all;}
+        mxdirt_height_field_scale_initial(s->height,f);
+        if(s->wave==1&&s->soil)memset(s->soil->cell,0,(size_t)s->soil->width*s->soil->height*sizeof(*s->soil->cell));
+        if(s->soft){MxdSoft *sf=s->soft;const size_t ft=(size_t)sf->tiles_x*sf->tiles_z;
+            for(size_t t=0;t<ft;t++)if(sf->tile[t]){free(sf->tile[t]);sf->tile[t]=NULL;sf->tile_serial[t]++;}
+            memset(sf->tile_fresh,0,ft);sf->allocated=0;sf->has_last[0]=sf->has_last[1]=0;}
+        s->sim->has_last[0]=s->sim->has_last[1]=0;memset(s->bump,0,sizeof(s->bump));s->wave=0;s->wave_done++;}
+}
+/* fork (6): the crew job advances along the lap line at ~15 m/s; returns 0 when done. */
+static void crew_step(MxdirtSession *s,float dt){
+    if(!s->job||!s->path||s->path_n<2)return;
+    float go=(s->job==1?8.f:11.f)*dt;const int kind=s->job;const float hw=kind==1?1.7f:2.2f; /* grader ~29 km/h, water truck ~40 */
+    while(go>0.f&&s->job_at+1<s->path_n){
+        const float *a=s->path+2*s->job_at,*b=a+2;const float seg=hypotf(b[0]-a[0],b[1]-a[1]),left=seg-s->job_len;
+        if(left<=go){mxb_soil_service_band(s->sim,a[0],a[1],b[0],b[1],hw,kind);go-=left;s->job_m+=left;s->job_len=0.f;s->job_at++;}
+        else{s->job_len+=go;s->job_m+=go;go=0.f;}
+    }
+    if(s->job_at+1>=s->path_n){s->job=0;s->jobs_done++;}
+}
 int mxdirt_session_step(MxdirtSession *s,const MxdirtControllerFrame frames[2],
     const int material[2],MxdirtHeightStats *stats) {
     if(!owned(s)||!s->sim||!frames||!material||frames[0].sequence!=frames[1].sequence||
@@ -604,7 +784,7 @@ int mxdirt_session_step(MxdirtSession *s,const MxdirtControllerFrame frames[2],
     for(int w=0;w<2;w++){
         s->live_ok[w]=0;
         if(s->priming){s->sim->has_last[w]=0;continue;}
-        MxbSoilSimWheel sw;sim_wheel(s,&input[w],w,gains[w],&sw);sw.material=material[w];sw.floor_bias=biases[w];sw.bias_floor=floors[w]>0.f?floors[w]:s->bias_floor_m;sw.turn=bumps[w].valid?mxb_bump_turn(&bumps[w].sit):0.f;sw.brake=bumps[w].valid?fmaxf(bumps[w].gb,fminf(1.f,fmaxf(0.f,(-sw.slip_long/fmaxf(sw.speed,1.f)-.10f)/.65f))):0.f; /* braking or hard on the gas */sw.brake=fmaxf(sw.brake,.6f*s->brake_in[w]); /* fork: where the rider actually brakes, the bump rows run wide */sw.impact=bumps[w].valid&&bumps[w].sit.since<.25f?1.f-bumps[w].sit.since/.25f:0.f;
+        MxbSoilSimWheel sw;sim_wheel(s,&input[w],w,gains[w],&sw);sw.material=material[w];sw.floor_bias=biases[w];sw.bias_floor=floors[w]>0.f?floors[w]:s->bias_floor_m;sw.floor_bias+=whoop_bias(s,&input[w],w,material[w],&sw.bias_floor);sw.turn=bumps[w].valid?mxb_bump_turn(&bumps[w].sit):0.f;sw.brake=bumps[w].valid?fmaxf(bumps[w].gb,fminf(1.f,fmaxf(0.f,(-sw.slip_long/fmaxf(sw.speed,1.f)-.10f)/.65f))):0.f; /* braking or hard on the gas */sw.brake=fmaxf(sw.brake,.6f*s->brake_in[w]); /* fork: where the rider actually brakes, the bump rows run wide */sw.impact=bumps[w].valid&&bumps[w].sit.since<.25f?1.f-bumps[w].sit.since/.25f:0.f;
         {const float d0=s->sim->p.depth_scale;s->sim->p.depth_scale=d0*(s->bump_gain>0.f?mxb_live_gate_share(&s->gate,1):1.f)*mxb_live_wear_depth(&s->wear); /* this pass's wear shared over the gate lines */
          mxb_soil_sim_wheel(s->sim,(unsigned)w,&sw);
          if(s->bump_gain>0.f)mxb_live_gate_wheel(s->sim,&s->gate,(unsigned)w,&sw,bumps[w].gs,bumps[w].gb,bumps[w].ge,bumps[w].landed);
@@ -629,7 +809,9 @@ int mxdirt_session_step(MxdirtSession *s,const MxdirtControllerFrame frames[2],
             s->sim->last_x[w]=lx;s->sim->last_z[w]=lz;s->sim->last_floor[w]=lf;s->sim->has_last[w]=lh;
         }
     }
-    if(!s->priming){ghosts_step(s,frames[0].dt);remotes_step(s);mxb_live_gate_advance(&s->gate,frames[0].dt);}
+    if(!s->priming){ghosts_step(s,frames[0].dt);remotes_step(s);mxb_live_gate_advance(&s->gate,frames[0].dt);boots_step(s,input,frames[0].dt);{const float nm=(float)s->c.height.native_metres;mxd_crash_step(&s->ev,s->sim,input,nm);mxd_berm_step(&s->ev,s->sim,input,nm);}
+        mxb_soil_weather_step(s->sim,frames[0].dt,s->rain,8000u,&s->wx); /* ~0.15 ms with rain on a 2048 grid */crew_step(s,frames[0].dt);anim_step(s,frames[0].dt);
+        {const float nm=(float)s->c.height.native_metres;if(input[1].contact){s->bike_x=input[1].point[0]*nm;s->bike_z=input[1].point[2]*nm;}}}
     mxb_soil_sim_end(s->sim);
     if(s->prewear_tiles){size_t tn=(size_t)s->sim->tiles_x*s->sim->tiles_y;for(size_t t=0;t<tn;t++)s->sim->tiles[t]|=s->prewear_tiles[t];free(s->prewear_tiles);s->prewear_tiles=NULL;}
     uint64_t t2=qpc_now();

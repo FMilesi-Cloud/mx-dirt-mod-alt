@@ -72,7 +72,7 @@ static const char mxdirt_fragment_sink[]="#define SINK 1\n";
 static const char mxdirt_fragment_body[]=
  "uniform sampler2D heights,background,clods;uniform ivec2 viewport_origin;uniform mat4 view,projection;uniform vec3 texel0;"
  "uniform vec2 spacing,fade,shift;uniform vec4 bounds,ramp;uniform vec3 camera;uniform float height_scale,strength,base_grain,relief,soft_lift;"
- "uniform sampler2D state;uniform int state_on;"
+ "uniform sampler2D state,state2;uniform int state_on;"
  "uniform sampler2D soft;uniform int soft_on,soft_mode;uniform vec2 soft_origin;uniform vec4 soft_window;uniform float soft_cell,soft_depth,soft_unit;"
  /* perf: one texel per soft tile slot (64x64, wraps like the window): 0 = no soft texel within one tile
     (soft_tile metres) of any point of this tile was ever touched. There the layer is flat at its rest
@@ -170,6 +170,9 @@ static const char mxdirt_fragment_body[]=
  /* soil state: the dirt sim's own per-texel state, else height-only defaults */
  "float s_pack=0.,s_loose=0.,wet=.35,s_clod=0.;"
  "if(state_on!=0){vec4 q=texture(state,(g+shift)/SIDE);s_pack=q.r;s_loose=q.g;wet=q.b;s_clod=q.a;}"
+ /* fork, phases 3-4: standing water (0..5 cm), dry crust, bare hard base */
+ "vec4 q2=state_on!=0?texture(state2,(g+shift)/SIDE):vec4(0.);float s_wat=q2.r,s_crust=q2.g,s_bare=q2.b;"
+ "float wt=smoothstep(.03,.30,s_wat);"
  "float scuff=smoothstep(.0008,.006,abs(dd))*(1.-smoothstep(.008,.025,abs(dd)));"
  /* with the sim state the mm-scale scuff fringe is not needed to find worked
     ground; keeping it small keeps rut edges crisp instead of fuzzy */
@@ -210,6 +213,11 @@ static const char mxdirt_fragment_body[]=
  "float wf=worked*base_grain*(1.-.6*firm)*f_mid,wc=lumpy*f_big;"
  "micro+=turn((k4.rg-.5)*2.,-2.4)*.24*wf+turn((k5.rg-.5)*2.,-.4)*.22*wc;"
  "crevice*=1.+.06*wc*(k5.b-.5);"
+ /* fork (11): bare base - darker, greyer, stony grain; (12) crust - paler, a net of thin dry cracks */
+ "albedo=mix(albedo,albedo*vec3(.80,.78,.76)+vec3(.025),.85*s_bare*worked);crevice*=1.-.14*s_bare*(.5-k4.b)*f_mid;"
+ "{vec4 kc=texture(clods,turn(p,1.1)/.33+vec2(.13,.57));float crack=(1.-smoothstep(.0,.05,abs(kc.b-.5)))*s_crust*f_mid;"
+ "albedo=mix(albedo,albedo*1.10,.55*s_crust);crevice*=1.-.38*crack;}"
+ "micro*=1.-.9*wt;"
  /* tread: travel axis = low-curvature axis of the dug delta's Hessian, so knob
     bars run across each rut and drag streaks along it; crisp in damp soil */
  "vec2 d11=H(g+vec2(1,1)),dmm=H(g-vec2(1,1)),d1m=H(g+vec2(1,-1)),dm1=H(g+vec2(-1,1));"
@@ -304,9 +312,11 @@ static const char mxdirt_fragment_body[]=
     floor is already darkened as damp, so deep wet ruts do not go black. */
  "val*=1.-relief*.24*r_dark*(1.-.45*wetv)+relief*.11*r_light;"
  "vec3 soilc=max(mix(vec3(lum),albedo,sat),0.)*val;"
+ /* fork (4): a puddle - dark muddy water with a sky tint */
+ "soilc=mix(soilc,soilc*vec3(.40,.37,.33)+vec3(.035,.04,.045),wt*(1.-green));"
  /* sheen: wet rut bottoms and damp hard-pack, never loose dirt or grass */
  "vec3 V=normalize(camera-w),Hv=normalize(L+V);"
- "float gloss=(.06*firm*(.3+.7*damp)+.16*wetv+.05*s_press*s_vis*damp)*(1.-.8*loose)*(1.-green);"
+ "float gloss=(.06*firm*(.3+.7*damp)+.16*wetv+.05*s_press*s_vis*damp)*(1.-.8*loose)*(1.-green)+.85*wt*(1.-green);"
  "float spec=2.*gloss*pow(max(dot(nd,Hv),0.),40.)*max(dot(nd,L),0.);"
  "vec3 sunc=gl_LightSource[0].diffuse.rgb;if(dot(sunc,vec3(1))<.05)sunc=vec3(1);sunc=min(sunc,vec3(1.5));"
  "float sshade=mix(1.,s_shade,s_vis);"
