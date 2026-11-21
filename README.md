@@ -76,7 +76,11 @@ Mismo recorrido sintético para las dos versiones (`tests/bench_sim.c`): grilla 
 | **Total** | **0,090 ms** | **0,129 ms** |
 | Pre-wear de 50 pilotos (una vez al cargar) | 1,54 s | 1,63 s |
 
-En el juego (log de esta versión, 2560×1440): simulación 0,075 ms por paso, conversión de alturas 0,044 ms, pase de render en GPU 2,5 ms de mediana (p90 3,5 ms). Las máquinas 3D suman entre 900 y 6800 triángulos solo mientras están en pista.
+En el juego (RTX 3050 laptop, 2560×1440): simulación ~0,11 ms por paso, conversión de alturas 0,044 ms, pase de render en GPU ~2,0 ms de mediana (p90 2,9 ms). Las máquinas 3D suman entre 900 y 6800 triángulos solo mientras están en pista.
+
+**Pase de render (`tests/bench_gpu.c`, el pase real a 2560×1440 sobre una pista sintética):** el shader deja al juego la tierra que nadie tocó (allí el resultado es el píxel del juego) y solo lee los detalles finos donde se ven. Pista gastada 2,22 → 1,80 ms (−19 %), tierra intacta 1,89 → 0,55 ms (−70 %), con la misma imagen.
+
+**Otras mejoras de esta tanda:** el shading de tierra se prende y apaga sin reiniciar el juego; la capa solo se dibuja sobre el suelo del juego (compara su profundidad con la de la escena: no más sombreado sobre el cielo al cambiar de cámara ni parches flotando después de una caída); después de un reseteo, alisado o pasada de niveladora el juego recibe la pista en tandas de hasta 32 pedazos, los más cercanos primero (unos segundos con tirones en vez de tener que recorrer la pista); whoops de arena con espaciado fijo de 4,5 m y más bajos; opción para simular la superficie "soft" (pistas ARL) como tierra común.
 
 ### Correcciones
 
@@ -305,7 +309,11 @@ The same synthetic ride for both versions (`tests/bench_sim.c`): a 2048 grid ove
 | **Total** | **0.090 ms** | **0.129 ms** |
 | 50-rider pre-wear (once, on load) | 1.54 s | 1.63 s |
 
-In game (this version's log, 2560×1440): simulation 0.075 ms a step, height conversion 0.044 ms, GPU render pass 2.5 ms median (p90 3.5 ms). The 3D machines add 900 to 6800 triangles only while they are out.
+In game (RTX 3050 laptop, 2560×1440): simulation ~0.11 ms a step, height conversion 0.044 ms, GPU render pass ~2.0 ms median (p90 2.9 ms). The 3D machines add 900 to 6800 triangles only while they are out.
+
+**Render pass (`tests/bench_gpu.c`, the real pass at 2560×1440 over a synthetic track):** the shader leaves ground nobody touched to the game (there the result is the game's own pixel) and reads fine detail only where it still shows. Worn track 2.22 → 1.80 ms (−19 %), untouched ground 1.89 → 0.55 ms (−70 %), same image.
+
+**Also in this batch:** dirt shading turns on and off without restarting the game; the layer only draws on the game's ground (it compares its depth with the scene's: no more shading over the sky on a camera change, no floating patch after a crash); after a reset, smooth or grader pass the game gets the track in batches of up to 32 tiles, nearest first (a few seconds with some stutter instead of having to ride the track); sand whoops with a fixed 4.5 m spacing, lower; an option to simulate the "soft" surface (ARL tracks) as ordinary soil.
 
 ### Fixes
 

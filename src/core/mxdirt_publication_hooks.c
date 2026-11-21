@@ -196,7 +196,7 @@ int mxb_publication_dirty(MxbPublicationHooks *h,int id,unsigned mode,unsigned c
  /* fork: the flagged tiles nearest the rider's tile go first (after a reset or a grader pass the whole track is
     flagged: the ground ahead must not wait its turn behind the far end of the map); round robin without a focus */
  {size_t n=0;for(size_t tile=0;tile<h->tiles;tile++)n+=snapshot[tile]!=0;h->flagged=n;}
- if(h->focus_on&&cap){const size_t tx_n=(h->c.pending.width+63)/64;size_t best[16];long bd[16];size_t nb=0;const size_t want=cap<16?cap:16;
+ if(h->focus_on&&cap){const size_t tx_n=(h->c.pending.width+63)/64;size_t best[32];long bd[32];size_t nb=0;const size_t want=cap<32?cap:32;
   for(size_t tile=0;tile<h->tiles;tile++){if(!snapshot[tile])continue;
    const long dx=(long)(tile%tx_n)-h->focus_x,dz=(long)(tile/tx_n)-h->focus_z,d=dx*dx+dz*dz;
    size_t at=nb;while(at>0&&bd[at-1]>d)at--;if(at>=want)continue;

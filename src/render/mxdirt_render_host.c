@@ -389,7 +389,7 @@ API int Startup(char *savepath){
  image_size=nt.OptionalHeader.SizeOfImage;
  mark(verified_image?A_START:A_HASH_FAIL,(uintptr_t)image_base,image_size);
  surface_enabled=GetPrivateProfileIntW(L"renderer",L"raised_dirt_surface",1,config_path)!=0; /* 0 = native dig-only layer exposure */
- hooks_wanted=mxdirt_content_dirt_enabled();
+ hooks_wanted=mxdirt_content_started(); /* fork: hooked whenever the renderer runs, so dirt_material can be switched on and off while playing (off = the pass draws nothing) */
  if(!verified_image||(!hooks_wanted&&!surface_enabled)){mark(A_GATE_FAIL,(uintptr_t)verified_image,(uintptr_t)hooks_wanted);flush_log(0);return startup_fail(error);}
  flush_log(0);SetLastError(error);return 3;
 }

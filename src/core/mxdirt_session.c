@@ -354,14 +354,14 @@ int mxdirt_session_crew_ground(const MxdirtSession *s,float x,float z,const floa
     ref[0]=s->bike_x;ref[1]=s->bike_z;ref[2]=mxd_ground_m(m,s->bike_x,s->bike_z);
     return isfinite(*y)&&isfinite(slope[0])&&isfinite(slope[1])&&isfinite(ref[2]);
 }
-int mxdirt_session_phase_stats(const MxdirtSession *s,MxdirtPhaseStats *o){
+int mxdirt_session_phase_stats(const MxdirtSession *s,MxdirtPhaseStats *o,int counts){
     if(!s||!o||!s->sim)return 0;memset(o,0,sizeof(*o));const MxbSoilSim *m=s->sim;
     o->wave=s->wave;o->wave_progress=s->wave?fminf(1.f,s->wave_reach/(float)m->size):0.f;
     o->job_progress=s->job&&s->path_len>0.f?fminf(1.f,s->job_m/s->path_len):0.f;o->moisture_easing=s->moist_rate>0.f;
     o->exposed_cells=m->exposed_cells;o->crust_breaks=m->crust_breaks;o->eroded_m3=m->eroded_m3;
     o->weather_visits=s->wx.visits;o->water_moves=s->wx.moved;o->sweep_s=s->wx.last_sweep;o->rain=s->rain;
     o->whoop_frames=s->whoop_frames;o->job=s->job;o->job_m=s->job_m;o->jobs_done=s->jobs_done;o->path_points=s->path_n;
-    {const size_t n=(size_t)m->size*m->size;uint64_t wet=0,cr=0;for(size_t k=0;k<n;k+=7){wet+=m->water[k]>25;cr+=m->crust[k]>128;}o->puddle_cells=wet*7;o->crust_cells=cr*7;} /* sampled */
+    if(counts){const size_t n=(size_t)m->size*m->size;uint64_t wet=0,cr=0;for(size_t k=0;k<n;k+=7){wet+=m->water[k]>25;cr+=m->crust[k]>128;}o->puddle_cells=wet*7;o->crust_cells=cr*7;} /* sampled */
     return 1;
 }
 int mxdirt_session_boot_stats(const MxdirtSession *s,uint64_t *steps,float *load_ref,uint64_t frames[4]){
@@ -724,21 +724,18 @@ static void boots_step(MxdirtSession *s,const MxdirtContact in[2],float dt){
         mxb_ss_setc(sm,k,c+.03f*fminf(1.f,force/400.f));mxb_ss_add(sm,q,r,-(.002f+.003f*fminf(1.f,soil.moisture/.6f))*(1.f-soil.packed)*.35f,0);}
     if(s->soft)mxd_soft_boot(s->soft,X,Z,f,force,&soil);
 }
-/* fork (5): sand whoops. On sand at speed on a straight, the chassis bounces at ~2.2 Hz; where the bounce pushes
-   the wheel down it digs, where it lifts the soil shoved ahead piles up: the same feedback as braking bumps, slower
-   and deeper, so regular whoops grow lap after lap (spacing = speed / bounce rate: ~5 m at 11 m/s). Returns the
-   extra floor bias (m, negative digs) and raises the trough limit. */
+/* fork (5): sand whoops. On a sand straight at speed every wheel digs a little more in the troughs of a fixed row
+   pattern (one whoop every 4.5 m along the way the bike travels) and leaves a little more on the crests, so the
+   same rows deepen lap after lap - regular, smooth, growing slowly (at most 6 cm a row below the smoothed ground,
+   x the setting). The first version followed the bike's own bounce: its spacing changed with the speed each lap
+   and it dug up to 12 cm a row - tall, sharp and uneven whoops. Returns the extra floor bias (m, negative digs). */
 static float whoop_bias(MxdirtSession *s,const MxdirtContact *i,int w,int material,float *bias_floor){
-    const float m=(float)s->c.height.native_metres,y=i->point[1]*m,dt=i->dt,v=hypotf(i->center_velocity[0],i->center_velocity[2])*m;
-    if(!(s->whoop_gain>0.f)||material!=5||!i->contact||!i->deformation||!(dt>0.f)||dt>.1f||!isfinite(y)||v<7.f){s->whoop_ok[w]=0;return 0.f;}
-    if(!s->whoop_ok[w]||fabsf(y-s->whoop_y[w])>.3f){s->whoop_ok[w]=1;s->whoop_y[w]=s->whoop_z[w]=y;s->whoop_zd[w]=0.f;return 0.f;}
-    const float wn=6.2831853f*2.2f,zeta=.22f,y0=s->whoop_y[w],yd=(y-y0)/dt,h=dt/8.f;float z=s->whoop_z[w],zd=s->whoop_zd[w],a=0.f;
-    for(int k=0;k<8;k++){const float yk=y0+(y-y0)*(float)(k+1)/8.f;a=wn*wn*(yk-z)+2.f*zeta*wn*(yd-zd);zd+=a*h;z+=zd*h;}
-    if(!isfinite(z)||fabsf(z-y)>.3f){s->whoop_ok[w]=0;return 0.f;}
-    s->whoop_y[w]=y;s->whoop_z[w]=z;s->whoop_zd[w]=zd;s->whoop_frames++;
-    const float push=fmaxf(-1.f,fminf(1.f,a/9.81f)),drive=w?fmaxf(s->drive_est[1],s->throttle_in>0.f?s->throttle_in:0.f):0.f;
-    *bias_floor=fmaxf(*bias_floor,.12f*fminf(2.f,s->whoop_gain));
-    return -.016f*s->whoop_gain*push*fminf(1.5f,v/12.f)*(1.f+.8f*drive); /* the low side is dug out under power */
+    const float m=(float)s->c.height.native_metres,v=hypotf(i->center_velocity[0],i->center_velocity[2])*m,fl=hypotf(i->forward[0],i->forward[2]);
+    if(!(s->whoop_gain>0.f)||material!=5||!i->contact||!i->deformation||v<7.f||fabsf(i->lean)>.25f||!(fl>1e-4f))return 0.f;
+    const float fx=i->forward[0]/fl,fz=i->forward[2]/fl,u=i->point[0]*m*fx+i->point[2]*m*fz; /* distance along the travel line */
+    const float drive=w?fmaxf(s->drive_est[1],s->throttle_in>0.f?s->throttle_in:0.f):0.f;s->whoop_frames++;
+    *bias_floor=fmaxf(*bias_floor,.06f*fminf(2.f,s->whoop_gain));
+    return -.007f*s->whoop_gain*sinf(6.2831853f*u/4.5f)*fminf(1.2f,v/12.f)*(1.f+.5f*drive); /* the low side digs a little more under power */
 }
 /* fork: animations, once per step: the wave covers ~sim size rows in ~3 s, both ways from the bike's row */
 static void anim_step(MxdirtSession *s,float dt){

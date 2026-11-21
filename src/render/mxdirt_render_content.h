@@ -15,6 +15,7 @@ int mxdirt_content_startup(const wchar_t *ini_path);
 /* 1 when the Dirt Material pass is configured on (dirt_material=1 and valid
    strength/loose/fade keys). The host installs its terrain hooks only then. */
 int mxdirt_content_dirt_enabled(void);
+int mxdirt_content_started(void); /* fork: the renderer is on (dirt_material may still be 0) */
 /* Current core generation (MxDirtFrame.generation) or 0 when the core is
    absent, not live, on the wrong thread or ABI-incompatible. No GL calls. */
 uint64_t mxdirt_content_generation(void);

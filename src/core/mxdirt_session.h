@@ -84,7 +84,8 @@ int mxdirt_session_ease_moisture(MxdirtSession *,float percent,float seconds);
 typedef struct {uint64_t exposed_cells,crust_breaks,weather_visits,water_moves,whoop_frames,jobs_done,puddle_cells,crust_cells;
     double eroded_m3;float sweep_s,rain,job_m;int job;uint32_t path_points;
     int wave,moisture_easing;float wave_progress,job_progress;} MxdirtPhaseStats;
-int mxdirt_session_phase_stats(const MxdirtSession *,MxdirtPhaseStats *);
+/* counts = 1: also sample the grid for puddle / crust cells (~0.5 ms: the log only, never per frame) */
+int mxdirt_session_phase_stats(const MxdirtSession *,MxdirtPhaseStats *,int counts);
 /* fork: the game's crash flag for the next step (from telemetry): no tyre wear, crash marks instead. */
 void mxdirt_session_set_crashed(MxdirtSession *,int crashed);
 /* fork: crash marks 0..200 % (0 = off) and how easily berms blow out 0..200 % (0 = never), live. */

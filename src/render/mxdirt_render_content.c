@@ -16,7 +16,7 @@
 static DWORD rc_thread;
 static int rc_started,rc_live,rc_retire,rc_fault;static double rc_gpu_last; /* fork: for the core menu */
 static int rc_dirt,rc_dirt_fault,rc_soft=1,rc_soft_live,rc_soft_solid=1,rc_tyre_sink=1;
-static MxDirt *rc_cpu;static MxDirtGl *rc_gl;static MxDirtLook rc_look;
+static MxDirt *rc_cpu;static MxDirtGl *rc_gl;static MxDirtLook rc_look;static float rc_settle=1.f;static unsigned rc_jumps; /* fork */
 static uint64_t rc_serial,rc_peak,rc_ticks,rc_recentres,rc_frames,rc_skips,rc_generation;
 static int rc_state_live;static MxDirtStats rc_stats;
 /* Measurement only (log): the longest gap between two drawn frames of the window and how many were over 20 / 33 ms,
@@ -132,6 +132,7 @@ int mxdirt_content_startup(const wchar_t *ini){
 end:SetLastError(error);return ok;
 }
 int mxdirt_content_dirt_enabled(void){return rc_started&&rc_dirt;}
+int mxdirt_content_started(void){return rc_started;}
 uint64_t mxdirt_content_generation(void){
  DWORD error=GetLastError();uint64_t generation=0;MxDirtFrame f;
  if(rc_started&&rc_live&&!rc_fault&&GetCurrentThreadId()==rc_thread&&rc_frame(&f))generation=f.generation;
@@ -183,12 +184,19 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
  if(!mxdirt_update(rc_cpu,&in,&window,&rc_stats)){rc_ticks=rc_elapsed(start);return 0;}
  rc_part[0]=rc_elapsed(start);
  if(window.recentered)rc_recentres++;
+ /* fork: a camera jump (a crash and the respawn, a camera change) - for about a second the game draws its own
+    terrain at a coarse level of detail while it streams the fine one in, and our exact-height ground floated
+    over it (or sank under it). After a jump the overlay waits .4 s and fades back in over 1 s; no tyre-sink
+    depth meanwhile. */
+ {static float last[3];static int have;static uint64_t jumped;const float dx=window.camera[0]-last[0],dy=window.camera[1]-last[1],dz=window.camera[2]-last[2];
+  if(!have||dx*dx+dy*dy+dz*dz>15.f*15.f){jumped=start;rc_jumps++;}have=1;memcpy(last,window.camera,sizeof(last));
+  const double since=(double)(start-jumped)*rc_ms_per_tick/1000.;rc_settle=since<.4?0.f:since>1.4?1.f:(float)((since-.4)*(since-.4)*(3.-2.*(since-.4)));}
  memcpy(rc_cam,window.camera,sizeof(rc_cam));rc_recentred=window.recentered!=0;
  /* Identity brackets the sparse reads. */
  if(!rc_identity(terrain,frame)){rc_ticks=rc_elapsed(start);return 0;}
  if(!rc_gl){if(!mxdirt_gl_create(&rc_gl,frame->generation)){int stage=0,major=0,profile=0;mxdirt_gl_last_failure(&stage,&major,&profile);
    const char *ver=(const char*)glGetString(GL_VERSION),*ren=(const char*)glGetString(GL_RENDERER);rc_dirt_fault=1;
-   mxdirt_content_note("dirt_disabled resource_create=1 stage=%d gl_major=%d profile_mask=%d gl_version=%s gl_renderer=%s",stage,major,profile,ver?ver:"?",ren?ren:"?");return -1;}}
+   mxdirt_content_note("dirt_disabled resource_create=1 stage=%d gl_major=%d profile_mask=%d gl_version=%s gl_renderer=%s",stage,major,profile,ver?ver:"?",ren?ren:"?");return -1;}else{const char *ren=(const char*)glGetString(GL_RENDERER),*ver=(const char*)glGetString(GL_VERSION);mxdirt_content_note("gl_ready gl_renderer=%s gl_version=%s",ren?ren:"?",ver?ver:"?");}}
  /* The dirt sim's own per-texel state; without it the pass shades from the height delta only. */
  MxDirtState state;memset(&state,0,sizeof(state));rc_state_live=0;
  if(frame->sim_comp){MxDirtSim sim={frame->sim_comp,frame->sim_loose,frame->sim_moist,frame->sim_clods,frame->sim_size,frame->sim_vertex_exact,frame->sim_moisture,frame->sim_compaction0,frame->sim_steps,frame->sim_water,frame->sim_crust,frame->sim_exposed};
@@ -208,7 +216,8 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
   if(frame->crew_ground_ok){crew.ground_ok=1;crew.y=frame->crew_y;crew.slope[0]=frame->crew_slope[0];crew.slope[1]=frame->crew_slope[1];
    memcpy(crew.grid,frame->crew_grid,sizeof(crew.grid));
    crew.ref[0]=frame->origin_m[0]+.5f*frame->span_x_m+frame->crew_ref[0];crew.ref[1]=frame->origin_m[2]+.5f*frame->span_z_m+frame->crew_ref[1];crew.ref[2]=frame->crew_ref[2];}}
- int result=mxdirt_gl_draw(rc_gl,scope,&window,&rc_look,&state,soft_on?&soft:NULL,&crew);rc_ticks=rc_elapsed(start);
+ MxDirtLook look=rc_look;look.strength*=rc_settle;if(rc_settle<1.f)soft.sink=0; /* fork: settling after a camera jump */
+ int result=mxdirt_gl_draw(rc_gl,scope,&window,&look,&state,soft_on?&soft:NULL,&crew);rc_ticks=rc_elapsed(start);
  rc_part[2]=rc_ticks-rc_part[0]-rc_part[1];
  if(rc_ticks>rc_peak){rc_peak=rc_ticks;memcpy(rc_peak_part,rc_part,sizeof(rc_part));}
  if(result<0){rc_dirt_fault=1;mxdirt_content_note("dirt_disabled resource_or_owner=1");}return result;
@@ -241,8 +250,8 @@ int mxdirt_content_draw(const MxDirtCameraScope *scope,const MxDirtTsTerrain *te
  {double g=0;if(rc_gl&&mxdirt_gl_gpu(rc_gl,&g,NULL,NULL)){rc_gpu_last=g;rc_gpu_sum+=g;rc_gpu_n++;if(g>rc_gpu_peak)rc_gpu_peak=g;}}
  if(rc_frames<=8||rc_frames%120==0){
   int fbo=0,samples=0,skip=0,vw=0,vh=0;mxdirt_gl_target(rc_gl,&fbo,&samples,&skip);mxdirt_gl_gpu(rc_gl,NULL,&vw,&vh);
-  mxdirt_content_note("dirt frame=%llu generation=%llu serial=%llu soft=%d sim_state=%d sim_steps=%llu result=%d stage=%u reads=%u read_bytes=%u changed=%u recentres=%llu identity_ms=%.3f dirt_ms=%.3f dirt_max_ms=%.3f content_ms=%.3f fbo=%d samples=%d skip=%d gap_max_ms=%.1f gap20=%u gap33=%u gpu_ms=%.3f gpu_max_ms=%.3f gpu_n=%u cam=%.0f,%.0f vp=%dx%d worst_update_ms=%.3f worst_state_ms=%.3f worst_gl_ms=%.3f",
-   (unsigned long long)rc_frames,(unsigned long long)frame.generation,(unsigned long long)scope->serial,rc_soft_live,rc_state_live,(unsigned long long)frame.sim_steps,dirt_result,rc_stats.stage,rc_stats.read_calls,rc_stats.read_bytes,rc_stats.changed,
+  mxdirt_content_note("camera_jumps=%u dirt frame=%llu generation=%llu serial=%llu soft=%d sim_state=%d sim_steps=%llu result=%d stage=%u reads=%u read_bytes=%u changed=%u recentres=%llu identity_ms=%.3f dirt_ms=%.3f dirt_max_ms=%.3f content_ms=%.3f fbo=%d samples=%d skip=%d gap_max_ms=%.1f gap20=%u gap33=%u gpu_ms=%.3f gpu_max_ms=%.3f gpu_n=%u cam=%.0f,%.0f vp=%dx%d worst_update_ms=%.3f worst_state_ms=%.3f worst_gl_ms=%.3f",
+   rc_jumps,(unsigned long long)rc_frames,(unsigned long long)frame.generation,(unsigned long long)scope->serial,rc_soft_live,rc_state_live,(unsigned long long)frame.sim_steps,dirt_result,rc_stats.stage,rc_stats.read_calls,rc_stats.read_bytes,rc_stats.changed,
    (unsigned long long)rc_recentres,identity_ticks*rc_ms_per_tick,rc_ticks*rc_ms_per_tick,rc_peak*rc_ms_per_tick,rc_elapsed(began)*rc_ms_per_tick,fbo,samples,skip,
    rc_gap_peak*rc_ms_per_tick,rc_gap20,rc_gap33,rc_gpu_n?rc_gpu_sum/rc_gpu_n:0.,rc_gpu_peak,rc_gpu_n,(double)rc_cam[0],(double)rc_cam[2],vw,vh,
    rc_peak_part[0]*rc_ms_per_tick,rc_peak_part[1]*rc_ms_per_tick,rc_peak_part[2]*rc_ms_per_tick);

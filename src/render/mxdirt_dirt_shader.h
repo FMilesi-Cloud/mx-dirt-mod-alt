@@ -40,6 +40,9 @@
    depth test before the shader runs. */
 #define MXDIRT_SOFT_SIDE 4096 /* fork: soft window texels (SOFT_SIDE in mxdirt_dirt_gl.c) */
 #define MXDIRT_SOFT_SLOT_MASK 127
+#ifndef MXDIRT_NO_QUIET
+#define MXDIRT_NO_QUIET 0
+#endif
 #ifndef MXDIRT_SOFT_FADE_AREA
 #define MXDIRT_SOFT_FADE_AREA 1
 #endif
@@ -78,6 +81,7 @@ static const char mxdirt_fragment_body[]=
     (soft_tile metres) of any point of this tile was ever touched. There the layer is flat at its rest
     height and none of its ~30 samples per pixel are taken; the result is the same. */
  "uniform sampler2D soft_occ;uniform float soft_tile;"
+ "uniform sampler2D scene_depth;uniform int depth_on;" /* fork: the game's depth at the terrain call */
  "in vec2 gv;in vec3 wv;layout(location=0) out vec4 color;"
  "const float SIDE=float(" MXDIRT_STR(MXDIRT_SIDE) ");"
  "vec2 H(vec2 c){return texture(heights,(c+shift)/SIDE).rg*height_scale;}"
@@ -103,7 +107,27 @@ static const char mxdirt_fragment_body[]=
  "vec4 ef=smoothstep(vec4(0.),ramp,vec4(w.x-bounds.x,w.z-bounds.y,bounds.z-w.x,bounds.w-w.z));"
  "float amount=(1.-smoothstep(fade.x,fade.y,dist))*ef.x*ef.y*ef.z*ef.w*strength;"
  "if(amount<=.003)discard;"
+ /* fork perf: ground nobody touched is drawn by the game exactly as this pass would draw it (untouched =
+    native), so leave it to the game: no deformation here or within 4 cells (the reach of a berm's shadow and
+    of the hollow / lip shading), no sim state (packing, loose soil, clods, water, crust, bare base) and the soft
+    layer here untouched and flat. ~13 reads instead of ~100 for most of the screen. */
+#if !MXDIRT_NO_QUIET /* (bench_gpu builds it both ways) */
+ "if(state_on!=0){vec2 tq=(g+shift)/SIDE;vec4 e0=texture(state,tq),e1=texture(state2,tq);"
+ "float act=max(max(e0.r,e0.g),max(e0.a,max(e1.r,max(e1.g,e1.b))));"
+ "if(act<.004){vec2 c=H(g);float d=abs(c.r-c.g);"
+ "for(int i=0;i<8&&d<2e-4;i++){float a=.7854*float(i);vec2 o=H(g+4.*vec2(cos(a),sin(a)));d=max(d,abs(o.r-o.g));}"
+ "if(d<2e-4){int quiet=1;"
+ "if(soft_on!=0){vec2 sl=p-soft_origin;float se=min(min(sl.x-soft_window.x,soft_window.z-sl.x),min(sl.y-soft_window.y,soft_window.w-sl.y));"
+ "if(se>-.5&&(texelFetch(soft_occ,ivec2(floor(sl/soft_tile))&ivec2(" MXDIRT_STR(MXDIRT_SOFT_SLOT_MASK) "),0).r>0.||.6*soft_depth*soft_lift>.002))quiet=0;}"
+ "if(quiet!=0)discard;}}}"
+#endif
  "ivec2 pix=ivec2(gl_FragCoord.xy)-viewport_origin;"
+ /* fork: only on the game's ground. Where the scene behind this pixel is the sky, or the game's ground is well
+    behind ours (its coarse terrain for a moment after a camera change or a respawn, ours floating over it), the
+    pass draws nothing: it showed rut shading over the sky and a floating patch of ground. */
+ "if(depth_on!=0){float dn=texelFetch(scene_depth,pix,0).r;if(dn>=.999999)discard;"
+ "float ln=projection[3][2]/((dn*2.-1.)+projection[2][2]),lo=projection[3][2]/((gl_FragCoord.z*2.-1.)+projection[2][2]);"
+ "if(ln-lo>max(.6,.06*lo))discard;}"
  /* Soft top layer, first: the view ray is marched down through it (parallax). The layer lies ON the ridden
     ground: its untouched top sits so above the terrain mesh, so a pressed trench floor (~.6 of the layer)
     is where the bike's tyre actually rolls.
@@ -203,20 +227,23 @@ static const char mxdirt_fragment_body[]=
 #else
  "float f_big=1.-smoothstep(.010,.025,px),f_mid=1.-smoothstep(.004,.010,px);"
 #endif
- "vec4 k1=texture(clods,p/.45),k2=texture(clods,turn(p,.83)/.31+vec2(.37,.11)),k3=texture(clods,turn(p,1.9)/1.3+vec2(.71,.29));"
+ /* fork perf: everything down to the tread is multiplied by `worked` (or by a fade that is 0 there): on soil the
+    tyres never touched none of its 13 reads are taken; the detail reads only where the detail is still visible */
+ "vec4 k1=vec4(.5),k2=vec4(.5);vec2 micro=vec2(0.);float crevice=1.;"
+ "if(worked>.001){k1=texture(clods,p/.45);k2=texture(clods,turn(p,.83)/.31+vec2(.37,.11));"
+ "vec4 k3=vec4(.5),k4=vec4(.5),k5=vec4(.5);if(max(f_big,f_mid)>0.){k3=texture(clods,turn(p,1.9)/1.3+vec2(.71,.29));"
+ "k4=texture(clods,turn(p,2.4)/.19+vec2(.23,.61));k5=texture(clods,turn(p,.4)/.62+vec2(.47,.83));}"
  "float a_clod=lumpy*f_big,a_crumb=worked*(.30+.35*(1.-firm))*f_mid,a_soft=worked*(.25+.5*loose)*f_big;"
- "vec2 micro=(k1.rg-.5)*2.*.42*a_clod+turn((k2.rg-.5)*2.,-.83)*.30*a_crumb+turn((k3.rg-.5)*2.,-1.9)*.30*a_soft;"
- "float crevice=1.-.16*a_clod*(.5-k1.b)-.08*a_crumb*(.5-k2.b);" /* centred: relief, not a net darkening */
+ "micro=(k1.rg-.5)*2.*.42*a_clod+turn((k2.rg-.5)*2.,-.83)*.30*a_crumb+turn((k3.rg-.5)*2.,-1.9)*.30*a_soft;"
+ "crevice=1.-.16*a_clod*(.5-k1.b)-.08*a_crumb*(.5-k2.b);" /* centred: relief, not a net darkening */
  /* fine grain (dirt_loose) and clumps: two more rotated, offset samples of the same
     generated clod relief at ~19 cm and ~62 cm repeats, worked ground only */
- "vec4 k4=texture(clods,turn(p,2.4)/.19+vec2(.23,.61)),k5=texture(clods,turn(p,.4)/.62+vec2(.47,.83));"
  "float wf=worked*base_grain*(1.-.6*firm)*f_mid,wc=lumpy*f_big;"
  "micro+=turn((k4.rg-.5)*2.,-2.4)*.24*wf+turn((k5.rg-.5)*2.,-.4)*.22*wc;"
  "crevice*=1.+.06*wc*(k5.b-.5);"
  /* fork (11): bare base - darker, greyer, stony grain; (12) crust - paler, a net of thin dry cracks */
  "albedo=mix(albedo,albedo*vec3(.80,.78,.76)+vec3(.025),.85*s_bare*worked);crevice*=1.-.14*s_bare*(.5-k4.b)*f_mid;"
- "{vec4 kc=texture(clods,turn(p,1.1)/.33+vec2(.13,.57));float crack=(1.-smoothstep(.0,.05,abs(kc.b-.5)))*s_crust*f_mid;"
- "albedo=mix(albedo,albedo*1.10,.55*s_crust);crevice*=1.-.38*crack;}"
+ "if(s_crust*f_mid>0.){vec4 kc=texture(clods,turn(p,1.1)/.33+vec2(.13,.57));crevice*=1.-.38*(1.-smoothstep(.0,.05,abs(kc.b-.5)))*s_crust*f_mid;}"
  "micro*=1.-.9*wt;"
  /* tread: travel axis = low-curvature axis of the dug delta's Hessian, so knob
     bars run across each rut and drag streaks along it; crisp in damp soil */
@@ -231,7 +258,8 @@ static const char mxdirt_fragment_body[]=
  "float knob=smoothstep(.35,.6,k1.g)*(1.-smoothstep(.2,.45,fs));"
  "float st=dot(p,across)/.3,fst=(abs(dot(dpx,across))+abs(dot(dpy,across)))/.3;vec2 su=vec2(st,dot(p,along)/5.);"
  "float streak=(texture(clods,su+vec2(.02,0)).r-texture(clods,su-vec2(.02,0)).r)*(1.-smoothstep(.15,.4,8.*fst));"
- "micro+=(along*(cos(6.2832*s)*.22*knob)+across*(streak*.9))*tw;"
+ "micro+=(along*(cos(6.2832*s)*.22*knob)+across*(streak*.9))*tw;}"
+ "albedo=mix(albedo,albedo*1.10,.55*s_crust);"
  /* soft top layer (core: mxdirt_soft_layer.h): loose soil lying on the dirt. Near
     the camera the view ray is marched down through it (parallax), so trenches
     read deep and lips stand up; lit from its own slopes and shadowed by them.

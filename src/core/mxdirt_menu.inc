@@ -32,6 +32,7 @@ static const MenuRow menu_phys[]={
  {"Erosion por lluvia","Rain erosion",MK_VAL,0,"soil","rain_erosion_percent",0,300,10,100,"%",0,0},
  {"Whoops de arena","Sand whoops",MK_VAL,0,"soil","sand_whoops_percent",0,300,10,100,"%",0,0},
  {"Labios y aterrizajes realistas","Realistic lips and landings",MK_VAL,0,"soil","lips_realistic",0,1,1,0,"",0,0},
+ {"Tratar 'soft' como tierra comun (ARL)","Treat 'soft' as ordinary soil (ARL)",MK_VAL,0,"soil","soft_as_soil",0,1,1,0,"",0,0},
  {"Cohesion de paredes","Wall cohesion",MK_VAL,0,"soil","wall_cohesion_percent",0,300,10,100,"%",0,0},
  {"Captura de surco","Rut capture",MK_VAL,0,"soil","rut_capture_percent",0,300,10,100,"%",0,0},
  {"Baches de frenado","Braking bumps",MK_VAL,0,"soil","braking_bumps_percent",0,200,10,100,"%",0,0},
@@ -71,6 +72,7 @@ static const MenuRow menu_track[]={
  {"Borrar perfil de esta pista","Delete this track's profile",MK_ACT,0,0,0,0,0,0,0,"",0,A_PROFILE_DEL},
  {"Pedazos de pista por envio","Track tiles per hand-over",MK_VAL,0,"terrain","batch_tiles",1,4,1,4,"",0,0},
  {"Tiempo minimo entre envios","Min time between hand-overs",MK_VAL,0,"terrain","send_interval_ms",0,250,10,0,"ms",0,0},
+ {"Pedazos por envio en cambios grandes","Tiles per hand-over on big changes",MK_VAL,0,"terrain","bulk_batch_tiles",4,32,4,32,"",0,0},
  {"Mod activado (al reiniciar)","Mod enabled (on restart)",MK_VAL,0,"active","enabled",0,1,1,1,"",1,0},
 };
 static const MenuRow menu_oh[]={
@@ -214,7 +216,7 @@ static void menu_action(int op){
  switch(op){
  case A_GRADER:case A_TRUCK:
   if(!ra_session){menu_say(TR("Primero entra a la pista","Get on the track first"));break;}
-  {MxdirtPhaseStats q;if(!mxdirt_session_phase_stats(ra_session,&q)||q.path_points<50){menu_say(TR("No hay linea de pista (ni una vuelta grabada)","No track line (nor a recorded lap)"));break;}}
+  {MxdirtPhaseStats q;if(!mxdirt_session_phase_stats(ra_session,&q,0)||q.path_points<50){menu_say(TR("No hay linea de pista (ni una vuelta grabada)","No track line (nor a recorded lap)"));break;}}
   InterlockedExchange(&ra_menu_request,op);menu_say(op==A_GRADER?TR("La niveladora sale a la pista","The grader is out on the track"):TR("El regador sale a la pista","The water truck is out on the track"));break;
  case A_RESET:case A_SMOOTH:case A_WATER:
   if(!ra_session){menu_say(TR("Primero entra a la pista","Get on the track first"));break;}

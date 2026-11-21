@@ -12,7 +12,7 @@
 #include "mxb_soil_sim.h"
 /* metres of water -> 0..255 (.2 mm units), stochastic rounding so light rain still adds up */
 static inline uint8_t mxb_wx_units(MxbSoilSim *s,float m){float u=m/.0002f;if(!(u>0.f))return 0;if(u>=255.f)return 255;int i=(int)u;if(mxb_ss_rand(s)<u-(float)i)i++;return (uint8_t)(i>255?255:i);}
-typedef struct {uint64_t visits,moved,eroded_cells;uint32_t sweeps;float sweep_acc,last_sweep;} MxbWeatherStats;
+typedef struct {uint64_t visits,moved,eroded_cells,wet_now,wet_last;uint32_t sweeps;float sweep_acc,last_sweep;} MxbWeatherStats;
 /* rain 0..1 (1 = heavy, ~10 mm/min); dt: seconds of this step; budget: worked cells to visit at most. */
 static inline void mxb_soil_weather_step(MxbSoilSim *s,float dt,float rain,uint32_t budget,MxbWeatherStats *st){
     if(!s||!st||!s->water||!s->crust||!(dt>0.f)||dt>.5f)return;
@@ -20,10 +20,13 @@ static inline void mxb_soil_weather_step(MxbSoilSim *s,float dt,float rain,uint3
     if(!isfinite(rain)||rain<0.f)rain=0.f;if(rain>1.f)rain=1.f;
     /* a row waits one whole sweep between visits: what happened to it meanwhile is applied at once */
     st->sweep_acc+=dt;const float since=st->last_sweep>0.f?fminf(30.f,st->last_sweep):1.5f;
-    uint32_t done=0;int rows=0;const int max_rows=S/64>8?S/64:8; /* ~0.05 ms of row scanning per step */
+    /* perf: dry and no water standing anywhere (the usual case): only the crust is growing, on a ~10 min scale -
+       a quarter of the rows and cells per step (a sweep every ~5 s instead of ~1.3 s, the crust adds up the same) */
+    const int idle=rain<=0.f&&!st->wet_last&&!st->wet_now;
+    uint32_t done=0;int rows=0;const int max_rows=(S/64>8?S/64:8)/(idle?4:1);if(idle)budget/=4u;
     while(done<budget&&rows<max_rows){
         const int r=(int)s->wx_row;s->wx_row=(s->wx_row+1)%(uint32_t)S;rows++;
-        if(!s->wx_row){st->sweeps++;st->last_sweep=st->sweep_acc;st->sweep_acc=0.f;}
+        if(!s->wx_row){st->sweeps++;st->last_sweep=st->sweep_acc;st->sweep_acc=0.f;st->wet_last=st->wet_now;st->wet_now=0;}
         if(r<1||r>=S-1)continue;
         for(int q=1;q<S-1;q++){
             const size_t k=(size_t)r*S+q;if(!s->mat[k])continue;done++;
@@ -57,7 +60,7 @@ static inline void mxb_soil_weather_step(MxbSoilSim *s,float dt,float rain,uint3
                     float e=fminf(.0006f,p->erosion_gain*.2f*mv*fminf(1.f,slope));if(e>room)e=room;
                     if(e>0.f){mxb_ss_add(s,q,r,-e,0);mxb_ss_add(s,q2,r2,e,1);s->eroded_m3+=(double)e*s->cell_area;st->eroded_cells++;}}
             }
-            s->water[k]=mxb_wx_units(s,wv);
+            s->water[k]=mxb_wx_units(s,wv);st->wet_now+=s->water[k]!=0;
             if(s->water[k]>10&&s->moist_off[k]<26)mxb_ss_moist_add(s,k,2); /* a puddle soaks its cell */
         }
     }

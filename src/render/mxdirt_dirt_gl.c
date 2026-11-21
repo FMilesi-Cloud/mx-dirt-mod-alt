@@ -29,16 +29,16 @@ enum {
 #define FN(ret,name,args) ret(APIENTRY *name)args
 enum { GRID_VERTICES=(MXDIRT_CELLS+1)*(MXDIRT_CELLS+1), GRID_INDICES=MXDIRT_CELLS*MXDIRT_CELLS*6 };
 /* Texture units: 0 heights, 1 native colour snapshot, 2 clods, 3 sim state, 4 soft layer, 5 soft tile occupancy, 6 sim state 2 (fork: water, crust, bare base). */
-enum { UNITS=7 };
+enum { UNITS=8 }; /* fork: 7 = the scene's depth at the terrain call */
 /* Soft layer window: SOFT_SIDE^2 texels in SOFT_SLOTS^2 tile slots, slot = tile index mod SOFT_SLOTS. */
 /* fork: 128 slots (102 m) instead of 64 (51 m): the loose layer no longer pops in ~35 m ahead. Keep in step with
    MXDIRT_SOFT_SIDE / MXDIRT_SOFT_SLOT_MASK in mxdirt_dirt_shader.h. */
 enum { SOFT_TILE=32,SOFT_SLOTS=128,SOFT_SIDE=SOFT_TILE*SOFT_SLOTS };
 _Static_assert(SOFT_SIDE==MXDIRT_SOFT_SIDE&&SOFT_SLOTS-1==MXDIRT_SOFT_SLOT_MASK,"soft window size");
 enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,U_STATE2,
- U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_SOFT_OCC,U_SOFT_TILE,U_SHIFT,U_RELIEF,U_RAMP,U_SOFT_LIFT,U_COUNT };
+ U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_SOFT_OCC,U_SOFT_TILE,U_SHIFT,U_RELIEF,U_RAMP,U_SOFT_LIFT,U_SCENE_DEPTH,U_DEPTH_ON,U_COUNT };
 static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on","state2",
- "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode","soft_occ","soft_tile","shift","relief","ramp","soft_lift"};
+ "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode","soft_occ","soft_tile","shift","relief","ramp","soft_lift","scene_depth","depth_on"};
 /* Bindings this pass changes and must hand back unchanged. */
 typedef struct {GLint program,active,unpack_buffer,unpack[6],texture[UNITS],sampler[UNITS];} SavedBindings;
 static const GLenum unpack_names[6]={GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS,GL_UNPACK_SWAP_BYTES,GL_UNPACK_LSB_FIRST};
@@ -46,7 +46,7 @@ struct MxDirtGl {
  HGLRC context;DWORD thread;uint64_t generation;
  /* program[0] colour, program[1] the depth-only tyre-sink draw (same source with SINK defined; a uniform it
     does not use has location -1, which glUniform ignores). */
- GLuint program[2],vao,vbo,ibo,heights,background,clods,state,soft,occ,state2,linear,nearest,mipped,wrapped;
+ GLuint program[2],vao,vbo,ibo,heights,background,clods,state,soft,occ,state2,scene_depth,linear,nearest,mipped,wrapped;int depth_w,depth_h,depth_ok;
  GLint width,height,uniform[2][U_COUNT];int heights_ready,clods_ready,state_ready,soft_ready,occ_ready,state2_ready;
  /* Soft tile occupancy: slot_data = the slot's tile has soil data (was ever touched); the texture holds it
     widened by one slot each way (the window wraps, so does this). occ_fast: the layer's dimensions allow the
@@ -129,7 +129,7 @@ int mxdirt_gl_destroy(MxDirtGl *p){
  if(p->resolve_fbo&&p->delete_framebuffers)p->delete_framebuffers(1,&p->resolve_fbo);
  if(p->timer[0]&&p->delete_queries)p->delete_queries(2,p->timer);
  crew_destroy(p);free(p->stage);
- GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ,p->state2};for(unsigned k=0;k<UNITS;k++)if(textures[k])glDeleteTextures(1,textures+k);
+ GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ,p->state2,p->scene_depth};for(unsigned k=0;k<UNITS;k++)if(textures[k])glDeleteTextures(1,textures+k);
  GLuint samplers[4]={p->linear,p->nearest,p->mipped,p->wrapped};for(unsigned k=0;k<4;k++)if(samplers[k]&&p->delete_samplers)p->delete_samplers(1,samplers+k);
  for(unsigned k=0;k<2;k++)if(p->program[k]&&p->delete_program)p->delete_program(p->program[k]);if(p->vao&&p->delete_vao)p->delete_vao(1,&p->vao);
  GLuint buffers[2]={p->vbo,p->ibo};for(unsigned k=0;k<2;k++)if(buffers[k]&&p->delete_buffers)p->delete_buffers(1,buffers+k);
@@ -184,7 +184,7 @@ int mxdirt_gl_create(MxDirtGl **out,uint64_t generation){
  /* Names only; storage is allocated inside the draw scope after unpack state
     has been normalized. Binding once makes each name a GL_TEXTURE_2D. */
  gl_stage=7;GLint previous_texture=0;glGetIntegerv(GL_TEXTURE_BINDING_2D,&previous_texture);GLuint names[UNITS]={0};glGenTextures(UNITS,names);
- p->heights=names[0];p->background=names[1];p->clods=names[2];p->state=names[3];p->soft=names[4];p->occ=names[5];p->state2=names[6];
+ p->heights=names[0];p->background=names[1];p->clods=names[2];p->state=names[3];p->soft=names[4];p->occ=names[5];p->state2=names[6];p->scene_depth=names[7];p->depth_ok=-1;
  for(unsigned k=0;k<UNITS;k++)if(!names[k]){glBindTexture(GL_TEXTURE_2D,(GLuint)previous_texture);goto fail;}
  for(unsigned k=0;k<UNITS;k++)glBindTexture(GL_TEXTURE_2D,names[k]);glBindTexture(GL_TEXTURE_2D,(GLuint)previous_texture);
  gl_stage=8;cells=malloc(sizeof(float)*2*GRID_VERTICES);indices=malloc(sizeof(uint32_t)*GRID_INDICES);if(!cells||!indices)goto fail;
@@ -288,7 +288,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
  const GLint draw_fbo=p->cache.draw_fbo,read_fbo=p->cache.read_fbo,draw_buffer=p->cache.draw_buffer,*viewport=p->cache.viewport,vao=p->cache.vao,buffer=p->cache.buffer,*blend=p->cache.blend,depthfunc=p->cache.depthfunc,*polygon=p->cache.polygon;
  const GLboolean *color=p->cache.color,write=p->cache.write,*enabled=p->cache.enabled,blend_enabled=p->cache.blend_enabled,srgb=p->cache.srgb;const GLfloat offset_factor=p->cache.offset_factor,offset_units=p->cache.offset_units;
  const SavedBindings *saved=&p->cache.saved;
- const GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ,p->state2},samplers[UNITS]={p->wrapped,p->nearest,p->mipped,p->wrapped,p->wrapped,p->nearest,p->wrapped}; /* heights and state are toroidal like the soft window */
+ const GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ,p->state2,p->scene_depth},samplers[UNITS]={p->wrapped,p->nearest,p->mipped,p->wrapped,p->wrapped,p->nearest,p->wrapped,p->nearest}; /* heights and state are toroidal like the soft window */
  const int timed=check&&p->timer[0];
  if(timed){if(p->timing){uint64_t a=0,b=0;p->query_u64(p->timer[0],0x8866,&a);p->query_u64(p->timer[1],0x8866,&b);if(b>=a){p->gpu_ms=(double)(b-a)*1e-6;p->gpu_fresh=1;}}
   p->query_counter(p->timer[0],0x8e28);p->timing=1;}
@@ -367,6 +367,18 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   p->blit(viewport[0],viewport[1],viewport[0]+viewport[2],viewport[1]+viewport[3],0,0,viewport[2],viewport[3],GL_COLOR_BUFFER_BIT,GL_NEAREST);
   p->bind_framebuffer(X_DRAW_FRAMEBUFFER,(GLuint)draw_fbo);}
  if(snapshot&&!resolve)glCopyTexSubImage2D(GL_TEXTURE_2D,0,0,0,viewport[0],viewport[1],viewport[2],viewport[3]);
+ /* fork: the scene's depth too (the same read target): the shader draws only where its ground lies on the game's
+    ground - not over the sky, not floating over a coarser terrain the game shows for a moment after a camera change
+    or a respawn. Off for good if the copy ever fails (no depth to read; a multisampled target is not copied). */
+ int depth_on=0;
+ if(snapshot&&!resolve&&p->depth_ok!=0){p->active_texture(X_TEXTURE0+7);
+  if(p->depth_w!=viewport[2]||p->depth_h!=viewport[3]){for(unsigned e=0;e<16&&glGetError()!=GL_NO_ERROR;e++){}
+   glTexImage2D(GL_TEXTURE_2D,0,0x81a6 /* DEPTH_COMPONENT24 */,viewport[2],viewport[3],0,0x1902 /* DEPTH_COMPONENT */,GL_UNSIGNED_INT,NULL);glTexParameteri(GL_TEXTURE_2D,X_TEXTURE_MAX_LEVEL,0);
+   GLint dw=0;glGetTexLevelParameteriv(GL_TEXTURE_2D,0,GL_TEXTURE_WIDTH,&dw);p->depth_w=viewport[2];p->depth_h=viewport[3];if(dw!=viewport[2])p->depth_ok=0;}
+  if(p->depth_ok!=0){glCopyTexSubImage2D(GL_TEXTURE_2D,0,0,0,viewport[0],viewport[1],viewport[2],viewport[3]);
+   if(p->depth_ok<0)p->depth_ok=glGetError()==GL_NO_ERROR?1:0; /* first copy: did it work */
+   depth_on=p->depth_ok>0;}
+  p->active_texture(X_TEXTURE0+1);}
  glReadBuffer((GLenum)source_read);p->bind_framebuffer(X_READ_FRAMEBUFFER,(GLuint)read_fbo);
  if(resolve&&p->cache.scissor)glEnable(GL_SCISSOR_TEST);
  if(!snapshot){ /* no storage (resource error) or a target that cannot be resolved: leave the ground native */
@@ -386,7 +398,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   p->ui(u[U_SOFT_MODE],soft_on?(soft->solid?1:0):0);
   p->u1f(u[U_SOFT_CELL],soft_on?soft->cell:.025f);p->u1f(u[U_SOFT_DEPTH],soft_on?soft->thickness:.03f);p->u1f(u[U_SOFT_UNIT],soft_on?soft->unit:.001f);
   p->ui(u[U_SOFT_OCC],5);p->u1f(u[U_SOFT_TILE],soft_on?soft->cell*SOFT_TILE:.8f);
-  p->u2f(u[U_SHIFT],(float)w->shift_x,(float)w->shift_z);p->u1f(u[U_RELIEF],look->relief);p->u1f(u[U_SOFT_LIFT],look->lift<0.f?0.f:look->lift>1.f?1.f:look->lift);
+  p->u2f(u[U_SHIFT],(float)w->shift_x,(float)w->shift_z);p->u1f(u[U_RELIEF],look->relief);p->u1f(u[U_SOFT_LIFT],look->lift<0.f?0.f:look->lift>1.f?1.f:look->lift);p->ui(u[U_SCENE_DEPTH],7);p->ui(u[U_DEPTH_ON],depth_on);
   {float r[4];for(int k=0;k<4;k++)r[k]=w->ramp[k]>0.f?w->ramp[k]:8.f;p->u4f(u[U_RAMP],r[0],r[1],r[2],r[3]);}}
  p->use_program(p->program[0]);
  p->disable_indexed(GL_BLEND,0);p->color(0,1,1,1,0);
